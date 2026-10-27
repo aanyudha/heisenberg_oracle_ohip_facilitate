@@ -1,0 +1,8 @@
+.git
+node_modules
+.npm-cache
+.env
+data
+**/dist
+coverage
+.docker-local
