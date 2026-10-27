@@ -2,15 +2,23 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { chromium } from "playwright";
-const password = randomBytes(18).toString("base64url");
+const runId = randomBytes(4).toString("hex");
+const assignmentTitle = "Browser smoke assignment " + runId,
+  remoteTitle = "Realtime from another session " + runId,
+  reconnectTitle = "Realtime after restart " + runId;
+const docker = process.env.SMOKE_DOCKER === "true";
+const password =
+  process.env.SMOKE_PASSWORD || randomBytes(18).toString("base64url");
 await mkdir("data", { recursive: true });
 await mkdir("artifacts", { recursive: true });
 const dbPath = await mkdtemp("data/browser-");
-const port = process.env.SMOKE_PORT || "3101";
+const port = process.env.SMOKE_PORT || "3000";
 const env = {
   ...process.env,
+  NODE_ENV: "development",
+  APP_MODE: "demo",
   DATABASE_URL: "",
   LOCAL_DEMO: "true",
   LOCAL_DB_PATH: dbPath,
@@ -20,32 +28,62 @@ const env = {
   APP_ORIGIN: `http://localhost:${port}`,
   COOKIE_SECURE: "false",
 };
-async function run(args) {
-  await new Promise((resolve, reject) => {
-    const p = spawn(process.execPath, args, { stdio: "inherit", env });
-    p.on("exit", (c) => (c === 0 ? resolve() : reject(Error("Setup failed"))));
-    p.on("error", reject);
+function launch() {
+  const child = spawn(process.execPath, ["dist/server/index.js"], {
+    stdio: ["ignore", "pipe", "pipe"],
+    env,
+    windowsHide: true,
   });
+  child.stdout.resume();
+  child.stderr.resume();
+  return child;
 }
-await run(["--import", "tsx", "apps/api/src/migrate.ts"]);
-await run(["--import", "tsx", "apps/api/src/seed.ts"]);
-const server = spawn(
-  process.execPath,
-  ["--import", "tsx", "apps/api/src/index.ts"],
-  { stdio: ["ignore", "pipe", "pipe"], env },
-);
+async function stop(child) {
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise((r) => child.once("exit", r));
+  child.kill();
+  await exited;
+}
+if (
+  !docker &&
+  (await fetch(`http://localhost:${port}/api/health`).then(
+    () => true,
+    () => false,
+  ))
+)
+  throw Error(
+    `Port ${port} is occupied. Stop the other deployment before testing native mode.`,
+  );
+let server = docker ? undefined : launch();
+async function ready() {
+  for (let n = 0; n < 300; n++) {
+    try {
+      if ((await fetch(`http://localhost:${port}/api/health`)).ok) return;
+    } catch {
+      /* Wait for startup. */
+    }
+    if (server?.exitCode !== null && server?.exitCode !== undefined)
+      throw Error("Compiled server exited");
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw Error("Server did not start");
+}
 let browser;
 const errors = [],
   requests = [];
 try {
-  for (let n = 0; n < 100; n++) {
-    try {
-      if ((await fetch(`http://localhost:${port}/api/health`)).ok) break;
-    } catch {
-      /* Wait for the child process to bind its port. */
-    }
-    await new Promise((r) => setTimeout(r, 100));
-    if (n === 99) throw Error("Server did not start");
+  await ready();
+  const html = await (await fetch(`http://localhost:${port}`)).text();
+  const frontendHash = createHash("sha256").update(html).digest("hex");
+  for (const path of ["/api/missing", "/assets/missing.js"]) {
+    const response = await fetch(`http://localhost:${port}${path}`, {
+      headers: { accept: "text/html" },
+    });
+    if (
+      ![401, 404].includes(response.status) ||
+      response.headers.get("content-type")?.includes("text/html")
+    )
+      throw Error("Missing resources must not return SPA HTML");
   }
   const executablePath =
     process.env.CHROME_PATH ||
@@ -58,6 +96,12 @@ try {
     viewport: { width: 1440, height: 1050 },
   });
   const page = await context.newPage();
+  let socketCount = 0,
+    socketCloses = 0;
+  page.on("websocket", (socket) => {
+    socketCount++;
+    socket.on("close", () => socketCloses++);
+  });
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("request", (r) => {
     if (r.isNavigationRequest() && r.frame() === page.mainFrame())
@@ -91,23 +135,21 @@ try {
   await page
     .getByRole("heading", { name: "Priority Tasks", exact: true })
     .waitFor();
-  await page.getByLabel("Task title").fill("Browser smoke assignment");
+  await page.getByLabel("Task title").fill(assignmentTitle);
   await page.getByRole("button", { name: "Add task" }).click();
-  await page
-    .getByRole("heading", { name: "Browser smoke assignment" })
-    .waitFor();
-  const article = page
-    .locator("article")
-    .filter({ hasText: "Browser smoke assignment" });
+  await page.getByRole("heading", { name: assignmentTitle }).waitFor();
+  const article = page.locator("article").filter({ hasText: assignmentTitle });
   await article.getByLabel("Assign to").selectOption("demo-frontoffice");
   await article.getByLabel("Status").selectOption("acknowledged");
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll("article")].some(
-      (a) =>
-        a.textContent.includes("Browser smoke assignment") &&
-        a.querySelector("select")?.value === "demo-frontoffice" &&
-        a.querySelectorAll("select")[1]?.value === "acknowledged",
-    ),
+  await page.waitForFunction(
+    (title) =>
+      [...document.querySelectorAll("article")].some(
+        (a) =>
+          a.textContent.includes(title) &&
+          a.querySelector("select")?.value === "demo-frontoffice" &&
+          a.querySelectorAll("select")[1]?.value === "acknowledged",
+      ),
+    assignmentTitle,
   );
   // A second browser context simulates a backend change from another user session.
   const session = await context.request.get(`http://localhost:${port}/api/me`);
@@ -121,14 +163,14 @@ try {
       },
       data: {
         propertyId: "demo-1",
-        title: "Realtime from another session",
+        title: remoteTitle,
         priority: "normal",
       },
     },
   );
   if (!remote.ok()) throw Error("Remote mutation failed");
   await page
-    .getByRole("heading", { name: "Realtime from another session" })
+    .getByRole("heading", { name: remoteTitle })
     .waitFor({ timeout: 5000 });
   for (const name of [
     "Multi-Property Overview",
@@ -176,6 +218,86 @@ try {
   await page.getByRole("heading", { name: "Today's Arrivals" }).waitFor();
   if (requests.length !== 1)
     throw Error(`Internal navigation caused ${requests.length} document loads`);
+  const spaDocumentLoads = requests.length;
+  if (socketCount !== 1 || socketCloses !== 0)
+    throw Error("Page navigation interrupted the WebSocket session");
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.getByRole("link", { name: "Priority Tasks", exact: true }).click();
+  await page.getByRole("heading", { name: assignmentTitle }).waitFor();
+  if (docker) {
+    await new Promise((resolve, reject) => {
+      const p = spawn(
+        "docker",
+        [
+          "--config",
+          ".docker-local",
+          "compose",
+          "-p",
+          "hospitality-deploy-validation",
+          "restart",
+          "app",
+        ],
+        { stdio: "inherit", windowsHide: true },
+      );
+      p.on("error", reject);
+      p.on("exit", (code) =>
+        code === 0 ? resolve() : reject(Error("Docker restart failed")),
+      );
+    });
+  } else {
+    await stop(server);
+    server = launch();
+  }
+  await ready();
+  await page.waitForFunction(
+    () =>
+      [...document.querySelectorAll(".connection")].some(
+        (n) => n.textContent === "Connected",
+      ),
+    {},
+    { timeout: 30000 },
+  );
+  if (socketCount < 2 || socketCloses < 1)
+    throw Error("WebSocket did not reconnect after restart");
+  const persisted = await context.request.get(
+    `http://localhost:${port}/api/tasks?propertyId=demo-1`,
+  );
+  if (!persisted.ok()) throw Error("Session did not survive database restart");
+  const stored = (await persisted.json()).items.find(
+    (t) => t.title === assignmentTitle,
+  );
+  if (
+    !stored ||
+    stored.assignee !== "demo-frontoffice" ||
+    stored.status !== "acknowledged"
+  )
+    throw Error("Task data did not persist after restart");
+  const second = await context.request.post(
+    `http://localhost:${port}/api/tasks`,
+    {
+      headers: {
+        "x-csrf-token": identity.csrf,
+        origin: `http://localhost:${port}`,
+      },
+      data: {
+        propertyId: "demo-1",
+        title: reconnectTitle,
+        priority: "normal",
+      },
+    },
+  );
+  if (!second.ok()) throw Error("Post-reconnect mutation failed");
+  await page
+    .getByRole("heading", { name: reconnectTitle })
+    .waitFor({ timeout: 5000 });
+  await page.goto(`http://localhost:${port}/operations/reservations`);
+  await page
+    .getByRole("heading", { name: "Reservations", exact: true })
+    .waitFor();
+  await page.reload();
+  await page
+    .getByRole("heading", { name: "Reservations", exact: true })
+    .waitFor();
   if (errors.length) throw Error(errors.join("\n"));
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.getByRole("button", { name: "Sign out" }).click();
@@ -184,8 +306,13 @@ try {
     .waitFor();
   const result = {
     result: "PASS",
+    deployment: docker ? "docker" : "native",
+    frontendHash,
     browser: "Installed Chromium browser via Playwright",
+    spaDocumentLoads,
     documentLoads: requests.length,
+    socketCount,
+    socketCloses,
     pageErrors: errors,
     checks: [
       "login/logout",
@@ -196,8 +323,16 @@ try {
       "desktop/tablet/mobile",
       "no mobile overflow",
       "SPA navigation without document reload",
+      "same WebSocket across page navigation",
+      "server restart and WebSocket reconnect",
+      "database and session persistence after restart",
+      "realtime updates after reconnect",
+      "nested SPA route refresh",
+      "missing API/assets never return SPA HTML",
     ],
-    database: "Isolated embedded PostgreSQL (PGlite)",
+    database: docker
+      ? "PostgreSQL in Compose persistent volume"
+      : "Isolated persistent embedded PostgreSQL (PGlite)",
     screenshots: [
       "artifacts/dashboard-desktop.png",
       "artifacts/dashboard-tablet.png",
@@ -205,12 +340,11 @@ try {
     ],
   };
   await writeFile(
-    "artifacts/browser-result.json",
+    `artifacts/browser-${docker ? "docker" : "native"}-result.json`,
     JSON.stringify(result, null, 2),
   );
   console.log(JSON.stringify(result, null, 2));
 } finally {
   await browser?.close();
-  server.kill();
-  await new Promise((r) => server.once("exit", r));
+  await stop(server);
 }

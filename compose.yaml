@@ -1,12 +1,11 @@
 services:
   db:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: hospitality
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
       POSTGRES_DB: hospitality
-    ports:
-      - "127.0.0.1:5432:5432"
     volumes:
       - hospitality-db:/var/lib/postgresql/data
     healthcheck:
@@ -16,24 +15,30 @@ services:
       retries: 20
   app:
     build: .
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgres://hospitality:${POSTGRES_PASSWORD:-local-development-only}@db:5432/hospitality
-      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3001}
+      NODE_ENV: ${NODE_ENV:-development}
+      APP_MODE: ${APP_MODE:-demo}
+      APP_ORIGIN: ${APP_ORIGIN:-}
+      PORT: ${PORT:-3000}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
       OHIP_ALLOWED_HOSTS: ${OHIP_ALLOWED_HOSTS:-}
       POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-60000}
+      OHIP_REQUEST_INTERVAL_MS: ${OHIP_REQUEST_INTERVAL_MS:-250}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-}
       HOST: 0.0.0.0
     ports:
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
+      start_period: 30s
       retries: 3
 volumes:
   hospitality-db:

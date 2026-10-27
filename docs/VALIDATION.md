@@ -1,38 +1,33 @@
-# Validation — 2026-10-27 (Asia/Jakarta)
+# Validation ? single-server deployment
 
-Validated locally on Windows, Node.js 24.14.1, npm 11.19.0, installed Chrome via Playwright, and a dedicated Docker Compose PostgreSQL 17 service. No Oracle customer credentials or production property were used.
+Executed on 2026-10-27 (Asia/Jakarta), Windows / Node.js 24.14.1, npm 11.19.0, installed Chrome via Playwright, and Linux Node 24 / PostgreSQL 17 in an isolated Docker Compose project.
 
-| Gate | Actual result |
-| --- | --- |
-| `npm run lint` | PASS |
-| `npm run build` (strict TypeScript + Vite) | PASS; lazy route chunks generated |
-| `npm test`, embedded PostgreSQL | PASS — 44 tests across three files |
-| `TEST_DATABASE_URL=… npm test`, real PostgreSQL 17 | PASS — same 44-test suite; API/database/WebSocket suite uses an isolated schema in a local `_test` database |
-| `npm run test:browser` | PASS — real installed Chrome, isolated embedded PostgreSQL, built app |
-| `npm audit` | PASS — 0 reported vulnerabilities at validation time |
-| `docker compose config --quiet` | PASS |
-| Compose Dockerfile build | PASS — Linux Node 24 image, npm ci and TypeScript/Vite build |
-| Compose app and PostgreSQL health checks | PASS — both healthy |
-| Compose empty database | PASS — migration 0001 present, zero users, zero reservations; no seed required for startup |
-| HTTP smoke against Compose | PASS — `/api/health`, `/`, `/operations/reservations`, `/docs/json` return 200; unauthenticated `/api/me` returns 401 |
-| Live Oracle OAuth/search/property ingestion | NOT TESTED — no authorized credentials/property supplied |
-| Oracle Business Events / Streaming | NOT IMPLEMENTED / NOT ACTIVE — controlled polling is the supported fallback |
-| Physical tablet/mobile browsers and Safari | NOT TESTED — responsive validation used Chrome viewports |
-| Production deployment, HA, sustained load, backup/restore and security assessment | NOT TESTED — local V1 only |
+| Required check | Result | Evidence |
+| --- | --- | --- |
+| npm install | PASS | Actual root installation completed; 0 reported dependency vulnerabilities |
+| npm run build | PASS | Strict TypeScript check, Vite React output, compiled JavaScript backend and copied migrations in dist/ |
+| npm start | PASS | Actual command ran node dist/server/index.js, without tsx or Vite |
+| localhost:3000 browser / health | PASS | HTML, API health and authenticated operations loaded on the same origin |
+| SPA navigation | PASS | One top-level document load across all internal menu navigation; no WebSocket close/replacement during navigation |
+| Nested SPA refresh | PASS | Direct /operations/reservations navigation and browser reload both loaded the React route |
+| Native WebSocket recovery | PASS | Browser stayed open through server restart, reconnected, received a subsequent backend mutation without refresh |
+| Native persistence | PASS | Assigned/acknowledged task and authenticated session survived process restart using the same embedded database directory |
+| Docker one-command startup | PASS | docker compose up --build -d built the multi-stage image and started private PostgreSQL and Fastify; both healthy |
+| Docker runtime contents | PASS | Built server present; source tree, Vite, tsx and TypeScript packages absent |
+| Docker network | PASS | Only 127.0.0.1:3000 published; PostgreSQL 5432 is container-network-only; both services restart unless stopped |
+| Docker WebSocket recovery | PASS | Browser stayed open through app-container restart, reconnected, and received subsequent data |
+| Docker persistence | PASS | Task/session survived app restart; original credentials and assigned/acknowledged task also survived replacement of BOTH app and PostgreSQL containers while retaining the named volume |
+| Native/Docker equivalence | PASS | Same browser assertions pass; frontend HTML SHA-256 matches exactly |
+| Production validation / no seed | PASS | Five configuration tests plus actual compiled server/seed process checks; invalid production settings rejected before database creation |
+| Existing test suite | PASS | 49 tests: all original 44 plus 5 deployment configuration tests |
+| Lint | PASS | npm run lint |
 
-The 44 tests consist of 25 API/database/WebSocket tests, 12 Oracle contract/adapter/crypto tests, and seven frontend/navigation/realtime tests. The PostgreSQL run repeats the same suite; it is not an additional 44 distinct cases.
+The default local native deployment now uses persistent PGlite automatically; Docker uses PostgreSQL. Default demo mode initializes only a database without users, and never resets existing accounts. Server/production mode does not seed. Migrations run automatically, use a transaction/advisory lock, and preserve one applied-version record across restarts.
 
-API coverage includes cookie authentication, session/logout behavior, CSRF/Origin checks, role restrictions, tenant/property isolation, server-side aggregation, reservation pagination/search/detail, empty data/grants, task assignment validation/audit, room authorization, secret redaction, gateway allowlisting, safe/manual retry permissions, bounded backoff/dead letters, idempotent ingestion/checkpoints, tenant provisioning/switching, role/grant changes with session revocation, and OpenAPI request documentation. WebSocket tests verify cross-tenant/property exclusion, reconnect replay, foreign Origin rejection and logout revocation.
+Browser reports are generated as ignored artifacts: browser-native-result.json, browser-docker-result.json, deployment-equivalence.json, and docker-volume-result.json. Each browser report records one document load for SPA navigation and three total after the two deliberate nested-route navigation/reload checks. Both reports record zero page errors. The matching frontend hash is 7000e053d5e3714fea5520641b6832d9a67706c5ded46e6752373429582957a4.
 
-Oracle fixtures are validated by AJV against unmodified official schemas from Oracle tags 26.2, 26.3 and v26.4. OCIM token caching, one 401 refresh, no GET fallback, search body mapping, empty 204, throttling/Retry-After for token and reservation requests, TLS/network failure classification, cached-ID reconciliation, authenticated encryption/tamper detection, and matching sanitized correlation IDs are exercised with mocked transport. These do not prove compatibility with a particular customer's environment. The v26.4 RSV schema still identifies itself as 26.3.0.0; [source provenance](../fixtures/README.md).
+Native and Docker tests use port 3000 sequentially. An initial native harness run detected a still-running manually started server; the harness now refuses an occupied port, and validation was rerun against its own isolated database. Missing API routes may return 401 before authentication; missing assets return 404. Neither receives SPA HTML. Test identifiers are unique so rerunning Docker tests preserves existing data.
 
-Chrome smoke checks login/logout, reservation confirmation search/detail, task create/assign/acknowledge, a separate backend mutation appearing through WebSocket invalidation within five seconds, every customer menu route, desktop/tablet/mobile rendering, mobile navigation and horizontal-overflow absence. Exactly one top-level document request occurred across internal navigation, with zero page errors. Screenshots and a structured result are generated under ignored `artifacts/`:
+The full existing tests retain tenant/property isolation, authentication, pagination, retry safety, WebSocket authorization/replay, frontend loading/error/empty states, and official Oracle fixture checks. These are local tests; Oracle credentials/property ingestion, streaming, physical mobile devices, production TLS infrastructure, HA/load, backups and a production security assessment remain untested. No remote push or production deployment/configuration change was performed. Validation containers are stopped after checks, with their image and named development volume retained.
 
-- `dashboard-desktop.png` — 1440 × 1050 viewport, full-page capture.
-- `dashboard-tablet.png` — 768 × 1024 viewport.
-- `dashboard-mobile.png` — 390 × 844 viewport.
-- `browser-result.json` — assertions and result.
-
-Earlier verification exposed and corrected a public-branding authentication exemption that affected PUT, an Oracle VIP object/string mapping mismatch, and an OpenAPI union-type assertion in the test source. A browser run overlapped a Vite rebuild and lost old lazy assets; verification was rerun sequentially after the build completed. All PASS results above refer to successful reruns after the respective fixes.
-
-Working local features and remaining integration boundaries are listed in the [README](../README.md). Local validation containers are stopped after verification; the named development volume and image are retained. No remote push or production configuration change was performed.
+See [deployment details](DEPLOYMENT.md), [operational/Oracle boundaries](OPERATIONS.md), and [README](../README.md).

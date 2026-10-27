@@ -2,7 +2,7 @@
 
 ## Components
 
-`apps/api` contains Fastify HTTP/WebSocket transport, cookie sessions/authorization, operational services, Drizzle queries, the polling worker, and separate mock/real adapters. `apps/web` contains the React Router SPA and TanStack Query cache. `packages/contracts` contains shared DTOs and role policies. `db/migrations` is the authoritative PostgreSQL schema. Production uses node-postgres; PGlite is an explicit local-demo/test option.
+`apps/api` contains Fastify HTTP/WebSocket transport, cookie sessions/authorization, operational services, Drizzle queries, the polling worker, and separate mock/real adapters. `apps/web` contains the React Router SPA and TanStack Query cache. `packages/contracts` contains shared DTOs and role policies. `db/migrations` is the authoritative PostgreSQL schema. Server deployments use node-postgres; native local demo startup defaults to persistent PGlite. Both deployments run compiled JavaScript and serve built React assets through the same Fastify port; see [deployment boundaries](DEPLOYMENT.md).
 
 ```mermaid
 flowchart LR

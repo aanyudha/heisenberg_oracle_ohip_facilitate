@@ -1,102 +1,35 @@
 # Hospitality Operations Web V1
 
-A working local V1 for daily hotel operations, multi-property oversight, and integration recovery. Built from an empty repository; no prototype was overwritten. Customer-facing default branding is **Hospitality Operations**, with a configurable tenant identity. Version **1.0.0**.
+Choose **one** deployment method below. Both serve the same built React application, REST API and authenticated WebSocket through **Fastify at http://localhost:3000**. Do not run native and Docker deployments simultaneously on the same port. Neither method needs a Vite server or a second terminal.
 
-## Run the demo immediately
+## OPTION A: Run with Fastify
 
-Requires Node.js 24 and npm. In PowerShell:
+Requires Node.js 24 and npm. Docker and a PostgreSQL installation are not needed for the local demo.
 
-```powershell
-npm.cmd ci
-npm.cmd run demo
+```sh
+npm install
+npm run build
+npm start
 ```
 
-Open **http://localhost:5173**. The command creates an isolated, persistent embedded PostgreSQL database in `data/demo`, applies the SQL migration, seeds synthetic data, and prints a generated password. Login as `admin@demo.local`. Existing seed accounts retain their first password; set `DEMO_PASSWORD` consistently when reusing a database. The demo helper explicitly opts into PGlite; normal startup requires `DATABASE_URL`.
+`build` produces JavaScript backend files, React static assets and migrations in `dist/`. `start` runs `node dist/server/index.js`; it never starts Vite or runs TypeScript source. By default, native mode uses a persistent embedded PostgreSQL database in `data/demo`.
 
-All seed accounts use the provided `DEMO_PASSWORD`:
+## OPTION B: Run with Docker
 
-| Account | Role | Initial access |
-| --- | --- | --- |
-| `admin@demo.local` | Group admin | Three demo properties |
-| `platform@demo.local` | Platform admin + developer | Three demo properties; provision new tenants |
-| `manager@demo.local` | Hotel manager | Jakarta |
-| `frontoffice@demo.local` | Front office | Jakarta |
-| `housekeeping@demo.local` | Housekeeping | Jakarta, without guest APIs |
-| `it@demo.local` | IT | Three properties, integration tools, without guest APIs |
-| `admin@other.local` | Different tenant | Separate demo data; no access to first tenant |
+Requires Docker Engine with Compose. No npm command is needed on the host.
 
-Every demo source is labeled. Demo adapter sync only verifies the local adapter; it never contacts Oracle or fabricates a live connection. Empty databases and users with no property grants are supported.
-
-## PostgreSQL development
-
-```powershell
-Copy-Item .env.example .env
-# Set DEMO_PASSWORD to a local password of at least 12 characters in .env.
-docker compose up -d db
-npm.cmd run db:migrate
-npm.cmd run db:seed
-npm.cmd run dev
-```
-
-The default `.env.example` database URL matches the development Compose service. Use a different password before exposing any service. Do not seed a production database. `db:seed` explicitly refuses `NODE_ENV=production`; normal application startup never seeds.
-
-API: http://localhost:3001/api/health. Frontend: http://localhost:5173. Interactive OpenAPI: http://localhost:3001/docs; machine-readable schema: `/docs/json`. Vite proxies `/api`, including WebSocket upgrades, to the backend.
-
-## Run the full application with Compose
-
-```powershell
-# For the single-origin Compose app, set APP_ORIGIN=http://localhost:3001 in .env.
+```sh
 docker compose up --build -d
-docker compose exec app npm run db:seed
 ```
 
-Open **http://localhost:3001**. The same Fastify process serves the Vite build and API. Compose binds the app and database to loopback and persists PostgreSQL in a named volume. Migrations run on application startup under a database lock. Stopping services does not delete data.
+Compose builds the multi-stage image, waits for its private PostgreSQL service to be ready, and starts Fastify. Only application port **3000** is published, on loopback. PostgreSQL has no published host port and persists in a named volume. Both services have health checks and restart policies. The runtime image contains built application files and runtime dependencies, without Vite, tsx or TypeScript tooling.
 
-## Working features
+For both options, open **http://localhost:3000**. First startup in the default **DEMO** mode initializes an empty database with labeled sample data and prints the initial `admin@demo.local` password. Native prints it in the startup terminal; Docker records it in `docker compose logs app`. An optional `DEMO_PASSWORD` controls that first password. Restarting preserves accounts, sessions and operational changes; it does not reset or reseed existing data. No live Oracle connection is implied.
 
-- Morning briefing with source timestamps; arrivals, departures, VIP and in-house counts drill into filtered reservations. Search by confirmation/guest name, arrival and status; paginated reservation detail.
-- Rooms requiring attention and local housekeeping inspection; priority task creation, assignment, acknowledgment and completion. Changes are stored, audited and delivered to other browsers.
-- Server-side command center grouped by the current tenant and authorized properties, organization/date filters, property comparison and alerts. Property links select the corresponding operational workspace.
-- OCIM connection configuration per property/environment, encrypted credentials, request telemetry, correlation IDs, HTTP/latency/error classifications, safe read retries, bounded backoff and dead letters.
-- Organizations, properties, users/roles/property grants, branding and audit trail. Editing access revokes existing sessions. Platform administrators can provision an empty tenant and switch only to tenants where they hold membership.
-- Persistent React Router shell, lazy routes, skeleton/empty/error states, role-based menus, desktop/tablet/mobile layout, tenant app name/logo/favicon/color/title resolution.
-- Native Fastify WebSockets: authenticated cookie + Origin + CSRF, fresh grant checks, scoped metadata without PII, heartbeat/ping, bounded buffers, sequence replay, reconnection, reconciliation, focus refetch and 30-second HTTP fallback.
+`PORT` changes the application port; without an explicit `APP_ORIGIN`, the local origin follows it automatically. Optional settings are documented in [.env.example](.env.example); neither option requires an `.env` file for its local defaults. Native can use a separately managed PostgreSQL server by setting `DATABASE_URL`. The two deployment methods use separate default databases; switching methods does not transfer records automatically.
 
-## Oracle setup and limits
+For a real server, use `APP_MODE=server` with PostgreSQL. With `NODE_ENV=production`, startup additionally requires a valid HTTPS `APP_ORIGIN`, secure cookies and a valid encryption key. Server/production mode **never seeds demo data** and fails before opening the HTTP listener when configuration is invalid. See [configuration and deployment validation](docs/DEPLOYMENT.md).
 
-1. Create an **empty property** and grant the operator access. Demo and Oracle reservations cannot be mixed in a property; configuring the opposite source is rejected rather than deleting records.
-2. Set `ENCRYPTION_KEY` to a cryptographically random 32-byte key encoded as 64 hex characters, stored outside source control. Retain it securely for decryption/rotation.
-3. Set `OHIP_ALLOWED_HOSTS` to exact approved gateway hostnames. The adapter requires HTTPS, rejects URL credentials/extra paths/ports, and refuses redirects. TLS verification stays enabled.
-4. In OHIP Connections, select Oracle, choose the actual environment, and supply its OCIM client ID/secret, application key, enterprise ID and hotel/chain mapping. Credentials are write-only and replaced on save.
-5. Authorize the documented read operation in Oracle and inspect Integration Health and Request Logs. No real Oracle credentials or hotel access were supplied for this implementation.
+All existing operational features remain: tenant/property authorization, dynamic branding, dashboards, reservations, tasks, housekeeping, command center, integration telemetry/recovery, and audit trail. Nested SPA routes support browser refresh; internal navigation keeps the shell and WebSocket session. [Feature coverage and Oracle integration limits](docs/OPERATIONS.md).
 
-The adapter uses the official `POST /rsv/v1/hotels/{hotelId}/reservations/searches` operation, with OCIM `/oauth/v1/tokens`, token reuse and one 401 refresh. Read-only semantics make this POST search safe to retry; arbitrary POST/mutation retries are not supported. API permissions remain controlled by Oracle. SSD/resource-owner authentication is not implemented.
-
-The worker polls at least every 30 seconds (default 60), sends real requests at a configurable minimum spacing (default 250 ms per process), honors throttling `Retry-After`, and uses database leases plus `SKIP LOCKED`. Each job is bounded to 20 pages/search, 100 records/page, 1,000 cached IDs and an eight-minute deadline; exceeding a limit becomes a visible failure instead of a successful partial sync. Attempts stop after five and enter dead letters; authorized manual retry is audited. Configure intervals for the customer's API entitlement; multiple replicas require a shared outbound quota limiter before production.
-
-Polling covers current arrivals, departures and in-house reservations, then reconciles cached operational IDs to catch reschedules/cancellations. Changed snapshots are upserted atomically with the checkpoint and event outbox. Repeated identical snapshots preserve their timestamps; returning to an older state is still applied. Search is over the ingested local read model; this is not an unlimited Oracle search/archive. Missing/deleted reservations require an agreed upstream reconciliation policy; absence is not interpreted as deletion.
-
-Oracle Business Events/Streaming is **not enabled or claimed**. Enable a separately validated ingestion adapter only after the property's capability, permissions and consumer restrictions are known. Guest Profiles currently shows reservation guest summaries, not a full CRM profile feed. Room states/tasks are local operational data; Oracle room/profile writes and imports are not implemented. Date filters use reservation stay dates in the current read model; there are no historical KPI snapshots, and tasks/connection status reflect current state.
-
-Contracts and synthetic mapping fixtures are validated against official Oracle tags **26.2**, **26.3**, and **v26.4**. The RSV specification bundled in v26.4 still declares version 26.3.0.0. This confirms fixture compatibility, not live hotel compatibility or production readiness. Sources and license are recorded in [fixtures/README.md](fixtures/README.md).
-
-## Verify
-
-```powershell
-npm.cmd run lint
-npm.cmd run build
-npm.cmd test
-npm.cmd run test:browser
-```
-
-The browser smoke script requires an installed Chrome/Edge on Windows, or `CHROME_PATH` pointing to an installed Chromium executable; otherwise install the Playwright browser separately. It launches its own built application on port 3101, creates a fresh embedded PostgreSQL demo database, and closes its server/browser. Screenshots and structured results go to ignored `artifacts/`.
-
-To repeat API/database/WebSocket tests against a **disposable local PostgreSQL** database, create a database whose name ends in `_test` and set `TEST_DATABASE_URL`. The suite creates a unique schema, runs the migration and seed there, and drops only that schema at teardown:
-
-```powershell
-$env:TEST_DATABASE_URL='postgres://hospitality:local-development-only@localhost:5432/hospitality_test'
-npm.cmd test
-Remove-Item Env:TEST_DATABASE_URL
-```
-
-See [docs/VALIDATION.md](docs/VALIDATION.md) for actual results, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for boundaries and deployment considerations, [docs/FILES.md](docs/FILES.md) for the source manifest, and [CHANGELOG.md](CHANGELOG.md).
+Verification: `npm test`, `npm run lint`, and `npm run test:browser` (after build; installed Chromium browser required). PowerShell users whose execution policy blocks `npm.ps1` can use `npm.cmd` for the same commands. [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Source files](docs/FILES.md) · [Changelog](CHANGELOG.md).

@@ -8,13 +8,14 @@
     "packages/*"
   ],
   "scripts": {
+    "predev": "npm run build",
     "dev": "concurrently -k \"npm run dev -w apps/api\" \"npm run dev -w apps/web\"",
-    "build": "tsc --noEmit && npm run build -w apps/web",
+    "build": "tsc --noEmit && npm run build -w apps/web && node scripts/build-server.mjs",
     "lint": "eslint .",
     "test": "vitest run",
-    "db:migrate": "tsx apps/api/src/migrate.ts",
-    "db:seed": "tsx apps/api/src/seed.ts",
-    "start": "tsx apps/api/src/index.ts",
+    "db:migrate": "node dist/server/migrate.js",
+    "db:seed": "node dist/server/seed.js",
+    "start": "node dist/server/index.js",
     "demo": "node scripts/demo.mjs",
     "test:browser": "node scripts/browser-smoke.mjs"
   },
@@ -50,6 +51,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "ajv": "^8.17.1",
     "concurrently": "^9.2.1",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.0",
     "jsdom": "^27.0.1",
     "playwright": "^1.64.1",

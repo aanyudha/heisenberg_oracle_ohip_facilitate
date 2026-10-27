@@ -1,6 +1,6 @@
-# New source files
+# Source file manifest
 
-The repository was empty before implementation. All 56 files below are new; no existing prototype was replaced. Generated dependencies, build output, test databases, screenshots and local caches are ignored.
+The initial V1 bootstrapped an empty repository. The current source manifest contains 63 files. The single-server deployment changes build/start configuration, runtime bootstrap/paths/configuration, database startup, Docker/Compose, development helpers, deployment browser checks and documentation; operational services and original regression tests are retained. Generated output, dependencies, databases, screenshots and caches are ignored.
 
 - `.dockerignore`
 - `.env.example`
@@ -10,11 +10,14 @@ The repository was empty before implementation. All 56 files below are new; no e
 - `README.md`
 - `apps/api/package.json`
 - `apps/api/src/app.ts`
+- `apps/api/src/config.ts`
 - `apps/api/src/db.ts`
+- `apps/api/src/dev.ts`
 - `apps/api/src/index.ts`
 - `apps/api/src/migrate.ts`
 - `apps/api/src/ohip.ts`
 - `apps/api/src/openapi.ts`
+- `apps/api/src/paths.ts`
 - `apps/api/src/realtime.ts`
 - `apps/api/src/security.ts`
 - `apps/api/src/seed.ts`
@@ -39,7 +42,9 @@ The repository was empty before implementation. All 56 files below are new; no e
 - `compose.yaml`
 - `db/migrations/0001_initial.sql`
 - `docs/ARCHITECTURE.md`
+- `docs/DEPLOYMENT.md`
 - `docs/FILES.md`
+- `docs/OPERATIONS.md`
 - `docs/VALIDATION.md`
 - `eslint.config.js`
 - `fixtures/README.md`
@@ -52,8 +57,10 @@ The repository was empty before implementation. All 56 files below are new; no e
 - `packages/contracts/package.json`
 - `packages/contracts/src/index.ts`
 - `scripts/browser-smoke.mjs`
+- `scripts/build-server.mjs`
 - `scripts/demo.mjs`
 - `tests/api.test.ts`
+- `tests/config.test.ts`
 - `tests/frontend.test.tsx`
 - `tests/ohip.test.ts`
 - `tsconfig.json`

@@ -88,8 +88,8 @@ export async function seed(db: Database, password: string) {
     );
   });
 }
-if (process.argv[1]?.endsWith("seed.ts")) {
-  if (process.env.NODE_ENV === "production")
+if (process.argv[1]?.endsWith("seed.ts")||process.argv[1]?.endsWith("seed.js")) {
+  if (process.env.NODE_ENV === "production"||process.env.APP_MODE==='server')
     throw Error("Demo seed disabled in production");
   const db = await openDb();
   try {

@@ -5,14 +5,22 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { sql, type SQL } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { migrationPath } from "./paths.js";
 export { sql };
 export type Database = Awaited<ReturnType<typeof openDb>>;
 export async function openDb(
   test = false,
   connectionString = process.env.DATABASE_URL,
 ) {
-  if (!test && !connectionString && process.env.LOCAL_DEMO !== "true")
-    throw Error("Set DATABASE_URL or explicitly enable LOCAL_DEMO");
+  if (
+    !test &&
+    !connectionString &&
+    (process.env.LOCAL_DEMO === "false" ||
+      process.env.NODE_ENV === "production" ||
+      process.env.APP_MODE === "server")
+  )
+    throw Error("Server mode requires DATABASE_URL");
   const client =
     test || !connectionString
       ? new PGlite(
@@ -32,15 +40,16 @@ export async function openDb(
   };
 }
 export async function migrate(db: Database) {
-  await db.query(
-    sql`CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY)`,
-  );
   const migration = await readFile(
-    new URL("../../../db/migrations/0001_initial.sql", import.meta.url),
+    join(migrationPath, "0001_initial.sql"),
     "utf8",
   );
   await db.orm.transaction(async (tx) => {
-    await tx.execute(sql`LOCK TABLE schema_migrations IN EXCLUSIVE MODE`);
+    // Also serialize the very first CREATE TABLE across concurrent processes.
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(7291043000::bigint)`);
+    await tx.execute(
+      sql`CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY)`,
+    );
     if (
       (
         await tx.execute(
