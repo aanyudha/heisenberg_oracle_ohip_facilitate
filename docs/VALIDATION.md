@@ -1,33 +1,38 @@
-# Validation ? single-server deployment
+# Validation — centralized configuration and deployment
 
-Executed on 2026-10-27 (Asia/Jakarta), Windows / Node.js 24.14.1, npm 11.19.0, installed Chrome via Playwright, and Linux Node 24 / PostgreSQL 17 in an isolated Docker Compose project.
+Executed locally on 2026-10-27 (Asia/Jakarta), Windows / Node.js 24.14.1, Chromium browser through Playwright, Docker Desktop Linux containers, and PostgreSQL 17. This report describes the configuration changes in the current source tree.
 
-| Required check | Result | Evidence |
+| Check | Result | Evidence |
 | --- | --- | --- |
-| npm install | PASS | Actual root installation completed; 0 reported dependency vulnerabilities |
-| npm run build | PASS | Strict TypeScript check, Vite React output, compiled JavaScript backend and copied migrations in dist/ |
-| npm start | PASS | Actual command ran node dist/server/index.js, without tsx or Vite |
-| localhost:3000 browser / health | PASS | HTML, API health and authenticated operations loaded on the same origin |
-| SPA navigation | PASS | One top-level document load across all internal menu navigation; no WebSocket close/replacement during navigation |
-| Nested SPA refresh | PASS | Direct /operations/reservations navigation and browser reload both loaded the React route |
-| Native WebSocket recovery | PASS | Browser stayed open through server restart, reconnected, received a subsequent backend mutation without refresh |
-| Native persistence | PASS | Assigned/acknowledged task and authenticated session survived process restart using the same embedded database directory |
-| Docker one-command startup | PASS | docker compose up --build -d built the multi-stage image and started private PostgreSQL and Fastify; both healthy |
-| Docker runtime contents | PASS | Built server present; source tree, Vite, tsx and TypeScript packages absent |
-| Docker network | PASS | Only 127.0.0.1:3000 published; PostgreSQL 5432 is container-network-only; both services restart unless stopped |
-| Docker WebSocket recovery | PASS | Browser stayed open through app-container restart, reconnected, and received subsequent data |
-| Docker persistence | PASS | Task/session survived app restart; original credentials and assigned/acknowledged task also survived replacement of BOTH app and PostgreSQL containers while retaining the named volume |
-| Native/Docker equivalence | PASS | Same browser assertions pass; frontend HTML SHA-256 matches exactly |
-| Production validation / no seed | PASS | Five configuration tests plus actual compiled server/seed process checks; invalid production settings rejected before database creation |
-| Existing test suite | PASS | 49 tests: all original 44 plus 5 deployment configuration tests |
-| Lint | PASS | npm run lint |
+| Install | PASS | `npm.cmd install --offline --no-audit --no-fund`; existing dependency versions retained. This command did not perform a vulnerability audit. |
+| Lint | PASS | `npm.cmd run lint` |
+| Build | PASS | `npm.cmd run build`: TypeScript, React assets, Fastify bundles and migrations |
+| Regression tests | PASS | `npm.cmd test`: 79 tests in 5 files, including configuration validation, embedded reopen/idempotent migrations and concurrent stale-lock recovery |
+| Actual npm start | PASS | Compiled Fastify started in native/embedded mode, connection=ready; `/api/health` returned ok and SPA returned HTTP 200 on port 3000 |
+| Native embedded | PASS | Browser login/logout, all menu routes, SPA navigation, authenticated WebSocket updates, process restart, session/task persistence and realtime reconnect |
+| Native PostgreSQL | PASS | Same browser assertions against an isolated PostgreSQL server reached through loopback, using a password with special characters |
+| Docker PostgreSQL | PASS | Actual `docker compose up --build -d --wait` in an isolated project; configuration preflight, database and app healthchecks, same browser assertions and app-container restart |
+| Database durability | PASS | PostgreSQL task-data fingerprint unchanged after recreating the DB container while retaining its named volume |
+| Invalid configuration | PASS | Invalid APP_MODE/DB_TYPE, PostgreSQL empty password, malformed ports/hosts/identifiers, unknown settings and invalid security settings rejected |
+| Missing .env | PASS | Compiled CLI returns setup instructions before database/listener initialization |
+| Real database failures | PASS | Incorrect PostgreSQL password rejected with authentication guidance; unavailable connection rejected with connection guidance |
+| Command/mode mismatch | PASS | Native command rejects Docker mode, and a real container rejects native mode |
+| Concurrent deployments | PASS | Shared data-directory lock rejects native startup while Docker is active, including a different APP_PORT |
+| Compose credentials | PASS | Special-character password shared between DB and app; mismatched shell interpolation rejected by preflight |
+| PostgreSQL exposure | PASS | Actual inspected Compose database container has no host port binding |
+| HTTP secret boundary | PASS | Browser checks root `.env` request, health, branding and OpenAPI responses for runtime secrets; no secret returned |
+| Startup logs | PASS | Name, deployment, DB type, port and ready status present; test DB and demo passwords absent |
 
-The default local native deployment now uses persistent PGlite automatically; Docker uses PostgreSQL. Default demo mode initializes only a database without users, and never resets existing accounts. Server/production mode does not seed. Migrations run automatically, use a transaction/advisory lock, and preserve one applied-version record across restarts.
+`npm run test:deployment` automates the deployment matrix. Its test credentials are generated independently of the user's secrets. It temporarily changes root `.env`, restores the original in finally, and removes only its uniquely named test containers and volumes. Application data and original credentials are not reset. The standalone browser test also restores `.env` after its native test.
 
-Browser reports are generated as ignored artifacts: browser-native-result.json, browser-docker-result.json, deployment-equivalence.json, and docker-volume-result.json. Each browser report records one document load for SPA navigation and three total after the two deliberate nested-route navigation/reload checks. Both reports record zero page errors. The matching frontend hash is 7000e053d5e3714fea5520641b6832d9a67706c5ded46e6752373429582957a4.
+Ignored evidence files:
 
-Native and Docker tests use port 3000 sequentially. An initial native harness run detected a still-running manually started server; the harness now refuses an occupied port, and validation was rerun against its own isolated database. Missing API routes may return 401 before authentication; missing assets return 404. Neither receives SPA HTML. Test identifiers are unique so rerunning Docker tests preserves existing data.
+- `artifacts/config-deployment-result.json`
+- `artifacts/browser-native-embedded-result.json`
+- `artifacts/browser-native-postgres-result.json`
+- `artifacts/browser-docker-result.json`
+- `artifacts/dashboard-desktop.png`, `dashboard-tablet.png`, `dashboard-mobile.png`
 
-The full existing tests retain tenant/property isolation, authentication, pagination, retry safety, WebSocket authorization/replay, frontend loading/error/empty states, and official Oracle fixture checks. These are local tests; Oracle credentials/property ingestion, streaming, physical mobile devices, production TLS infrastructure, HA/load, backups and a production security assessment remain untested. No remote push or production deployment/configuration change was performed. Validation containers are stopped after checks, with their image and named development volume retained.
+All three browser runs use the same built frontend. They verify nested SPA route refresh, missing API/assets behavior, no document reload/WebSocket interruption during internal navigation, restart recovery, and subsequent realtime mutations. Existing tenant/property scoping, authentication, role permissions, retry handling, WebSocket authorization/replay, frontend states and Oracle fixtures remain covered by regression tests.
 
-See [deployment details](DEPLOYMENT.md), [operational/Oracle boundaries](OPERATIONS.md), and [README](../README.md).
+Business schema and migration SQL are unchanged. Live OPERA/OHIP connectivity, production TLS infrastructure, HA/load and real backup/restore operations are not validated by these local tests. No push or production deployment was performed. See [deployment details](DEPLOYMENT.md) and [README](../README.md).

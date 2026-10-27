@@ -1,5 +1,6 @@
-import { loadConfig } from "./config.js";
-import { openDb, migrate, sql } from "./db.js";
+import { loadConfig, applyConfig } from "./config.js";
+import { acquireDeploymentLock } from "./deployment-lock.js";
+import { openDb, migrate, sql, databaseError } from "./db.js";
 import { buildApp } from "./app.js";
 import { worker } from "./worker.js";
 import { seed } from "./seed.js";
@@ -7,7 +8,6 @@ import { frontendPath } from "./paths.js";
 import staticFiles from "@fastify/static";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
 
 async function main() {
   const config = loadConfig();
@@ -15,26 +15,27 @@ async function main() {
     throw Error(
       "Frontend build is missing. Run npm run build before npm start.",
     );
-  process.env.APP_ORIGIN = config.origin;
-  process.env.APP_MODE = config.mode;
-  process.env.COOKIE_SECURE = config.cookieSecure;
-  process.env.LOCAL_DB_PATH = config.databasePath;
-  const db = await openDb(false, config.databaseUrl);
+  applyConfig(config);
+  const release = await acquireDeploymentLock();
+  const db = await openDb(false, config).catch(async (error) => {
+    await release();
+    throw databaseError(error);
+  });
   let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+  let closeHookRegistered = false;
   try {
+    await db.checkConnection();
     await migrate(db);
     if (
-      config.mode === "demo" &&
+      config.demoSeed &&
       !(await db.query(sql`SELECT 1 FROM users LIMIT 1`)).length
     ) {
-      const password =
-        config.demoPassword || randomBytes(18).toString("base64url");
-      await seed(db, password);
+      await seed(db, config.demoPassword!);
       console.log(
         "DEMO workspace initialized. Sample data; no live Oracle connection.",
       );
       console.log("DEMO login: admin@demo.local");
-      console.log("DEMO initial password:", password);
+      console.log("Use the DEMO_PASSWORD configured in root .env.");
     }
     app = await buildApp(db);
     await app.register(staticFiles, { root: frontendPath });
@@ -72,8 +73,13 @@ async function main() {
     app.addHook("onClose", async () => {
       if (lifecycle.timer) clearInterval(lifecycle.timer);
       await pending;
-      await db.close();
+      try {
+        await db.close();
+      } finally {
+        await release();
+      }
     });
+    closeHookRegistered = true;
     await app.listen({ port: config.port, host: config.host });
     lifecycle.timer = setInterval(run, 5000);
     run();
@@ -82,11 +88,17 @@ async function main() {
         void app!.close();
       });
     console.log(
-      `Hospitality Operations: ${config.origin} (${config.mode}, ${config.databaseUrl ? "PostgreSQL" : "persistent embedded database"})`,
+      `${config.name}: ${config.origin} (mode=${config.mode}, database=${config.databaseType}, port=${config.port}, connection=ready)`,
     );
   } catch (error) {
     if (app) await app.close();
-    else await db.close();
+    if (!closeHookRegistered) {
+      try {
+        await db.close();
+      } finally {
+        await release();
+      }
+    }
     throw error;
   }
 }

@@ -1,10 +1,26 @@
 # Hospitality Operations Web V1
 
-Choose **one** deployment method below. Both serve the same built React application, REST API and authenticated WebSocket through **Fastify at http://localhost:3000**. Do not run native and Docker deployments simultaneously on the same port. Neither method needs a Vite server or a second terminal.
+Konfigurasi runtime berada di **satu file `.env` pada root project**. Kredensial tidak perlu diubah di source code atau Compose. Fastify menyajikan React SPA, REST API, OpenAPI, dan WebSocket terautentikasi melalui satu port, default **http://localhost:3000**.
 
-## OPTION A: Run with Fastify
+## Setup
 
-Requires Node.js 24 and npm. Docker and a PostgreSQL installation are not needed for the local demo.
+Gunakan Node.js 24/npm untuk native, atau Docker Engine dengan Compose untuk Docker.
+
+```sh
+cp .env.example .env
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+PowerShell: gunakan `Copy-Item .env.example .env`. Isi `ENCRYPTION_KEY` dengan hasil generator. `.env` di-ignore Git dan dikecualikan dari Docker build. Jangan menyalin ulang `.env.example` di atas konfigurasi yang sudah digunakan: kunci enkripsi lama diperlukan untuk membaca kredensial OHIP yang telah disimpan.
+
+## Native
+
+Pilih di `.env` **sebelum menjalankan command**:
+
+```dotenv
+APP_MODE=native
+DB_TYPE=embedded
+```
 
 ```sh
 npm install
@@ -12,24 +28,46 @@ npm run build
 npm start
 ```
 
-`build` produces JavaScript backend files, React static assets and migrations in `dist/`. `start` runs `node dist/server/index.js`; it never starts Vite or runs TypeScript source. By default, native mode uses a persistent embedded PostgreSQL database in `data/demo`.
+Embedded menggunakan PGlite, sebuah PostgreSQL embedded yang persisten. `DB_FILE=./data/app.db` adalah **direktori data**, bukan file SQLite. Untuk PostgreSQL eksternal, ubah `DB_TYPE=postgres` dan isi `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, serta `DB_SSL` di `.env`.
 
-## OPTION B: Run with Docker
+## Docker
 
-Requires Docker Engine with Compose. No npm command is needed on the host.
+Pilih di `.env`:
+
+```dotenv
+APP_MODE=docker
+DB_TYPE=postgres
+DB_NAME=hotel_operations
+DB_USER=hotel_admin
+# Isi DB_PASSWORD dengan secret unik sebelum menjalankan Compose.
+```
 
 ```sh
 docker compose up --build -d
+docker compose ps
+docker compose logs app
 ```
 
-Compose builds the multi-stage image, waits for its private PostgreSQL service to be ready, and starts Fastify. Only application port **3000** is published, on loopback. PostgreSQL has no published host port and persists in a named volume. Both services have health checks and restart policies. The runtime image contains built application files and runtime dependencies, without Vite, tsx or TypeScript tooling.
+Compose membaca root `.env`, melakukan validasi sebelum PostgreSQL berjalan, menunggu DB sehat, lalu menjalankan Fastify. DB selalu menggunakan `db:5432` di Docker; tidak ada port PostgreSQL yang dipublikasikan. Data PostgreSQL berada di named volume. `.env` dipasang read-only saat runtime, dan tidak dimasukkan ke image/frontend.
 
-For both options, open **http://localhost:3000**. First startup in the default **DEMO** mode initializes an empty database with labeled sample data and prints the initial `admin@demo.local` password. Native prints it in the startup terminal; Docker records it in `docker compose logs app`. An optional `DEMO_PASSWORD` controls that first password. Restarting preserves accounts, sessions and operational changes; it does not reset or reseed existing data. No live Oracle connection is implied.
+Hentikan deployment aktif sebelum mengganti `APP_MODE`: Ctrl+C untuk native, atau `docker compose down` untuk Docker. Jangan gunakan `down -v` pada database yang ingin disimpan. Startup menolak command yang tidak sesuai mode dan menggunakan lock bersama di `data/` untuk mencegah dua deployment aktif, termasuk jika portnya berbeda. Setelah proses dihentikan paksa, tunggu 30 detik untuk pemulihan lock.
 
-`PORT` changes the application port; without an explicit `APP_ORIGIN`, the local origin follows it automatically. Optional settings are documented in [.env.example](.env.example); neither option requires an `.env` file for its local defaults. Native can use a separately managed PostgreSQL server by setting `DATABASE_URL`. The two deployment methods use separate default databases; switching methods does not transfer records automatically.
+## Data dan fitur
 
-For a real server, use `APP_MODE=server` with PostgreSQL. With `NODE_ENV=production`, startup additionally requires a valid HTTPS `APP_ORIGIN`, secure cookies and a valid encryption key. Server/production mode **never seeds demo data** and fails before opening the HTTP listener when configuration is invalid. See [configuration and deployment validation](docs/DEPLOYMENT.md).
+Default `NODE_ENV=production` tidak mengisi akun atau data demo. Provisioning identitas production mengikuti proses administrasi yang sudah ada. Untuk mencoba fitur dengan data sintetis, set `NODE_ENV=development`, `DEMO_SEED=true`, dan `DEMO_PASSWORD` yang unik (minimal 12 karakter) di `.env`. Database tanpa user akan diisi sekali; login `admin@demo.local` memakai password tersebut. Password tidak dicetak di log. Database yang sudah berisi user tidak di-reset.
 
-All existing operational features remain: tenant/property authorization, dynamic branding, dashboards, reservations, tasks, housekeeping, command center, integration telemetry/recovery, and audit trail. Nested SPA routes support browser refresh; internal navigation keeps the shell and WebSocket session. [Feature coverage and Oracle integration limits](docs/OPERATIONS.md).
+RBAC, multi-tenant/property authorization, white-label branding, seluruh menu operasional, worker OHIP, dan realtime tetap dipertahankan. [Panduan variabel, keamanan, backup, dan deployment](docs/DEPLOYMENT.md) menjelaskan seluruh pengaturan. Native dan Docker memiliki penyimpanan berbeda; mengganti mode tidak memindahkan data otomatis.
 
-Verification: `npm test`, `npm run lint`, and `npm run test:browser` (after build; installed Chromium browser required). PowerShell users whose execution policy blocks `npm.ps1` can use `npm.cmd` for the same commands. [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md) · [Source files](docs/FILES.md) · [Changelog](CHANGELOG.md).
+## Verifikasi
+
+```sh
+npm run lint
+npm run build
+npm test
+npm run test:browser
+npm run test:deployment
+```
+
+PowerShell dapat memakai `npm.cmd`. Browser test memerlukan Chrome/Edge atau Chromium Playwright. `test:deployment` memerlukan Docker lokal dan Chromium; jalankan saat aplikasi berhenti. Script menguji tiga kombinasi mode/DB, error startup, restart, persistensi, serta SPA/API/WebSocket satu port menggunakan database terisolasi. Script mengganti `.env` sementara dan memulihkannya di akhir; jangan menjalankan proses deployment lain bersamaan. Hasil ada di `artifacts/`. Pengujian ini tidak melakukan push atau deployment production.
+
+[Feature coverage](docs/OPERATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Validation](docs/VALIDATION.md)

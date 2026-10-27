@@ -7,3 +7,5 @@ coverage/
 .npm-cache/
 artifacts/
 .docker-local/
+.env.*
+!.env.example

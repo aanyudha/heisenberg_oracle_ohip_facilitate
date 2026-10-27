@@ -1,35 +1,37 @@
-import "dotenv/config";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle as embedded } from "drizzle-orm/pglite";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
+import { loadConfig, type AppConfig } from "./config.js";
 import { sql, type SQL } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { migrationPath } from "./paths.js";
 export { sql };
 export type Database = Awaited<ReturnType<typeof openDb>>;
-export async function openDb(
-  test = false,
-  connectionString = process.env.DATABASE_URL,
-) {
-  if (
-    !test &&
-    !connectionString &&
-    (process.env.LOCAL_DEMO === "false" ||
-      process.env.NODE_ENV === "production" ||
-      process.env.APP_MODE === "server")
-  )
-    throw Error("Server mode requires DATABASE_URL");
+export async function openDb(test = false, connection?: string | AppConfig) {
+  const config =
+    !test && typeof connection !== "string"
+      ? connection || loadConfig()
+      : undefined;
+  const postgres: PoolConfig | undefined =
+    typeof connection === "string"
+      ? { connectionString: connection, connectionTimeoutMillis: 5000 }
+      : config?.database;
   const client =
-    test || !connectionString
-      ? new PGlite(
-          test ? undefined : process.env.LOCAL_DB_PATH || "./data/demo",
-        )
-      : new Pool({ connectionString });
+    test || !postgres
+      ? new PGlite(test ? undefined : config!.databasePath)
+      : new Pool(postgres);
   const orm = client instanceof PGlite ? embedded(client) : drizzle(client);
   return {
     orm,
+    async checkConnection() {
+      try {
+        await orm.execute(sql`SELECT 1`);
+      } catch (error) {
+        throw databaseError(error);
+      }
+    },
     async query<T = Record<string, any>>(query: SQL): Promise<T[]> {
       return (await orm.execute(query)).rows as T[];
     },
@@ -38,6 +40,21 @@ export async function openDb(
       else await client.end();
     },
   };
+}
+export function databaseError(error: unknown): Error {
+  const e = error as { code?: string; cause?: { code?: string } };
+  const code = e?.code || e?.cause?.code;
+  if (code === "28P01" || code === "28000")
+    return Error(
+      "Database authentication failed. Check DB_USER and DB_PASSWORD in root .env; an existing PostgreSQL volume retains its original credentials.",
+    );
+  if (code === "3D000")
+    return Error(
+      "Database does not exist. Check DB_NAME and provision the PostgreSQL database.",
+    );
+  return Error(
+    "Database connection failed. Check DB_HOST, DB_PORT, DB_SSL, database service availability and data directory permissions.",
+  );
 }
 export async function migrate(db: Database) {
   const migration = await readFile(

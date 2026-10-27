@@ -13,6 +13,7 @@ await build({
     index: resolve(root, "apps/api/src/index.ts"),
     seed: resolve(root, "apps/api/src/seed.ts"),
     migrate: resolve(root, "apps/api/src/migrate.ts"),
+    "validate-config": resolve(root, "apps/api/src/validate-config.ts"),
   },
   outdir: resolve(output, "server"),
   bundle: true,

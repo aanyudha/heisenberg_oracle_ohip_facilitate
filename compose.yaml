@@ -1,41 +1,55 @@
 services:
+  config-check:
+    build: .
+    restart: "no"
+    env_file: .env
+    environment:
+      CHECK_DB_NAME: ${DB_NAME:?Set DB_NAME in root .env}
+      CHECK_DB_USER: ${DB_USER:?Set DB_USER in root .env}
+      CHECK_DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in root .env}
+      CHECK_APP_PORT: ${APP_PORT:-3000}
+    volumes:
+      - ./.env:/app/.env:ro
+    command: ["node", "dist/server/validate-config.js"]
   db:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: hospitality
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-development-only}
-      POSTGRES_DB: hospitality
+      POSTGRES_DB: ${DB_NAME:?Set DB_NAME in root .env}
+      POSTGRES_USER: ${DB_USER:?Set DB_USER in root .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in root .env}
     volumes:
       - hospitality-db:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hospitality -d hospitality"]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 3s
       retries: 20
+    depends_on:
+      config-check:
+        condition: service_completed_successfully
   app:
     build: .
     restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://hospitality:${POSTGRES_PASSWORD:-local-development-only}@db:5432/hospitality
-      NODE_ENV: ${NODE_ENV:-development}
-      APP_MODE: ${APP_MODE:-demo}
-      APP_ORIGIN: ${APP_ORIGIN:-}
-      PORT: ${PORT:-3000}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
-      OHIP_ALLOWED_HOSTS: ${OHIP_ALLOWED_HOSTS:-}
-      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-60000}
-      OHIP_REQUEST_INTERVAL_MS: ${OHIP_REQUEST_INTERVAL_MS:-250}
-      DEMO_PASSWORD: ${DEMO_PASSWORD:-}
-      HOST: 0.0.0.0
+    env_file: .env
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./data:/app/data
     ports:
-      - "127.0.0.1:${PORT:-3000}:${PORT:-3000}"
+      - "127.0.0.1:${APP_PORT:-3000}:${APP_PORT:-3000}"
     depends_on:
       db:
         condition: service_healthy
+      config-check:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.PORT+'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:'+(process.env.APP_PORT||3000)+'/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
       interval: 15s
       timeout: 5s
       start_period: 30s

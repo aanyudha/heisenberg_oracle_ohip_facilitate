@@ -1,6 +1,7 @@
 /* global document, window */
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { parse } from "dotenv";
 import { existsSync } from "node:fs";
 import { randomBytes, createHash } from "node:crypto";
 import { chromium } from "playwright";
@@ -9,29 +10,31 @@ const assignmentTitle = "Browser smoke assignment " + runId,
   remoteTitle = "Realtime from another session " + runId,
   reconnectTitle = "Realtime after restart " + runId;
 const docker = process.env.SMOKE_DOCKER === "true";
+const originalEnv = await readFile(".env", "utf8");
+const configured = parse(originalEnv);
 const password =
-  process.env.SMOKE_PASSWORD || randomBytes(18).toString("base64url");
+  process.env.SMOKE_PASSWORD ||
+  (docker ? configured.DEMO_PASSWORD : undefined) ||
+  randomBytes(18).toString("base64url");
 await mkdir("data", { recursive: true });
 await mkdir("artifacts", { recursive: true });
 const dbPath = await mkdtemp("data/browser-");
-const port = process.env.SMOKE_PORT || "3000";
+const port = process.env.SMOKE_PORT || configured.APP_PORT || "3000";
 const env = {
-  ...process.env,
+  ...configured,
   NODE_ENV: "development",
-  APP_MODE: "demo",
-  DATABASE_URL: "",
-  LOCAL_DEMO: "true",
-  LOCAL_DB_PATH: dbPath,
+  APP_MODE: "native",
+  DB_TYPE: process.env.SMOKE_EXTERNAL_DB === "true" ? "postgres" : "embedded",
+  DB_FILE: dbPath,
+  DEMO_SEED: "true",
   DEMO_PASSWORD: password,
-  PORT: port,
-  HOST: "127.0.0.1",
-  APP_ORIGIN: `http://localhost:${port}`,
+  APP_PORT: port,
+  APP_URL: `http://localhost:${port}`,
   COOKIE_SECURE: "false",
 };
 function launch() {
   const child = spawn(process.execPath, ["dist/server/index.js"], {
     stdio: ["ignore", "pipe", "pipe"],
-    env,
     windowsHide: true,
   });
   child.stdout.resume();
@@ -43,6 +46,9 @@ async function stop(child) {
   const exited = new Promise((r) => child.once("exit", r));
   child.kill();
   await exited;
+  const owner = await readFile("data/.deployment.lock", "utf8").catch(() => "");
+  if (owner.startsWith(String(child.pid) + ":"))
+    await rm("data/.deployment.lock", { force: true });
 }
 if (
   !docker &&
@@ -54,9 +60,16 @@ if (
   throw Error(
     `Port ${port} is occupied. Stop the other deployment before testing native mode.`,
   );
+if (!docker)
+  await writeFile(
+    ".env",
+    Object.entries(env)
+      .map(([k, v]) => `${k}='${v}'`)
+      .join("\n"),
+  );
 let server = docker ? undefined : launch();
 async function ready() {
-  for (let n = 0; n < 300; n++) {
+  for (let n = 0; n < (docker ? 1800 : 300); n++) {
     try {
       if ((await fetch(`http://localhost:${port}/api/health`)).ok) return;
     } catch {
@@ -75,6 +88,16 @@ try {
   await ready();
   const html = await (await fetch(`http://localhost:${port}`)).text();
   const frontendHash = createHash("sha256").update(html).digest("hex");
+  for (const path of ["/.env", "/api/health", "/api/branding", "/docs/json"]) {
+    const body = await (await fetch(`http://localhost:${port}${path}`)).text();
+    for (const secret of [
+      configured.DB_PASSWORD,
+      configured.ENCRYPTION_KEY,
+      password,
+    ])
+      if (secret && body.includes(secret))
+        throw Error("A runtime secret was exposed through HTTP");
+  }
   for (const path of ["/api/missing", "/assets/missing.js"]) {
     const response = await fetch(`http://localhost:${port}${path}`, {
       headers: { accept: "text/html" },
@@ -229,11 +252,9 @@ try {
       const p = spawn(
         "docker",
         [
-          "--config",
-          ".docker-local",
           "compose",
           "-p",
-          "hospitality-deploy-validation",
+          process.env.SMOKE_COMPOSE_PROJECT || "hospitality-deploy-validation",
           "restart",
           "app",
         ],
@@ -329,10 +350,12 @@ try {
       "realtime updates after reconnect",
       "nested SPA route refresh",
       "missing API/assets never return SPA HTML",
+      "runtime secrets never returned through HTTP",
     ],
-    database: docker
-      ? "PostgreSQL in Compose persistent volume"
-      : "Isolated persistent embedded PostgreSQL (PGlite)",
+    database:
+      docker || env.DB_TYPE === "postgres"
+        ? "PostgreSQL in Compose persistent volume"
+        : "Isolated persistent embedded PostgreSQL (PGlite)",
     screenshots: [
       "artifacts/dashboard-desktop.png",
       "artifacts/dashboard-tablet.png",
@@ -340,11 +363,15 @@ try {
     ],
   };
   await writeFile(
-    `artifacts/browser-${docker ? "docker" : "native"}-result.json`,
+    `artifacts/browser-${docker ? "docker" : "native-" + env.DB_TYPE}-result.json`,
     JSON.stringify(result, null, 2),
   );
   console.log(JSON.stringify(result, null, 2));
 } finally {
   await browser?.close();
   await stop(server);
+  if (!docker) {
+    // Windows may forcibly terminate Node rather than delivering SIGTERM.
+    await writeFile(".env", originalEnv);
+  }
 }

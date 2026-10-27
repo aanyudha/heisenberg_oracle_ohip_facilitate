@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { openDb, migrate, sql, type Database } from "./db.js";
 import { hashPassword } from "./security.js";
+import { loadConfig } from "./config.js";
 export async function seed(db: Database, password: string) {
   if (password.length < 12)
     throw Error("DEMO_PASSWORD requires at least 12 characters");
@@ -88,13 +89,17 @@ export async function seed(db: Database, password: string) {
     );
   });
 }
-if (process.argv[1]?.endsWith("seed.ts")||process.argv[1]?.endsWith("seed.js")) {
-  if (process.env.NODE_ENV === "production"||process.env.APP_MODE==='server')
-    throw Error("Demo seed disabled in production");
-  const db = await openDb();
+if (
+  process.argv[1]?.endsWith("seed.ts") ||
+  process.argv[1]?.endsWith("seed.js")
+) {
+  const config = loadConfig();
+  if (config.production) throw Error("Demo seed disabled in production");
+  const db = await openDb(false, config);
   try {
     await migrate(db);
-    await seed(db, process.env.DEMO_PASSWORD || "");
+    await db.checkConnection();
+    await seed(db, config.demoPassword || "");
     console.log("DEMO seeded. Login: admin@demo.local with DEMO_PASSWORD");
   } finally {
     await db.close();
