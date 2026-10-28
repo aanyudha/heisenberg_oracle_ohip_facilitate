@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, X, ArrowUpRight } from "lucide-react";
+import { useParams, useSearchParams } from "react-router-dom";
+import { Search, X, ArrowUpRight } from "lucide-react";
 import type { Reservation, Task } from "@hospitality/contracts";
 import { canGuests } from "@hospitality/contracts";
 import { useWorkspace } from "../workspace";
-import { useData, write, time } from "../api";
+import { useData, time } from "../api";
 import { Badge, Empty, Heading, Pager, State } from "../components";
 export function ReservationTable({
   items,
@@ -76,14 +75,11 @@ export default function Operations() {
   const { section } = useParams();
   const { user, propertyId, date } = useWorkspace();
   const [params] = useSearchParams();
-  const client = useQueryClient();
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState(""),
     [arrival, setArrival] = useState(""),
     [page, setPage] = useState(1),
-    [selected, setSelected] = useState(""),
-    [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [selected, setSelected] = useState("");
   const isRooms = section === "rooms",
     isTasks = section === "tasks",
     isReservations = !isRooms && !isTasks;
@@ -92,7 +88,9 @@ export default function Operations() {
       ? "arrivals"
       : section === "departures"
         ? "departures"
-        : params.get("view") || "";
+        : section === "inhouse"
+          ? "inhouse"
+          : params.get("view") || "";
   useEffect(() => {
     setPage(1);
     setSelected("");
@@ -132,24 +130,11 @@ export default function Operations() {
     `/reservations/${encodeURIComponent(selected)}?propertyId=${propertyId}`,
     !!selected,
   );
-  async function mutate(path: string, body: unknown, method = "POST") {
-    setError("");
-    setBusy(true);
-    try {
-      await write(path, body, method);
-      await client.invalidateQueries({
-        predicate: (q) => q.queryKey.includes(propertyId),
-      });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
   const title =
     (
       {
-        rooms: "Rooms & Housekeeping",
+        rooms: "Rooms & Housekeeping (View)",
+        inhouse: "In-House Guests",
         tasks: "Priority Tasks",
         arrivals: "Today's Arrivals",
         departures: "Today's Departures",
@@ -171,11 +156,6 @@ export default function Operations() {
             : "The details that keep your property running smoothly."
         }
       />
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
       {isReservations && (
         <section className="panel">
           <div className="toolbar">
@@ -231,40 +211,13 @@ export default function Operations() {
       )}
       {isTasks && (
         <>
-          <form
-            className="panel inline-form"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const form = e.currentTarget;
-              const f = new FormData(form);
-              await mutate("/tasks", {
-                propertyId,
-                title: f.get("title"),
-                priority: f.get("priority"),
-              });
-              form.reset();
-            }}
-          >
-            <input
-              name="title"
-              placeholder="What needs attention?"
-              aria-label="Task title"
-              required
-              maxLength={180}
-            />
-            <select name="priority" aria-label="Task priority">
-              <option value="normal">Normal priority</option>
-              <option value="high">High priority</option>
-              <option value="low">Low priority</option>
-            </select>
-            <button className="primary" disabled={busy || user.role === "it"}>
-              <Plus size={16} /> Add task
-            </button>
-          </form>
+          <p className="helper">
+            Read-only local task history. Operational edits are disabled.
+          </p>
           <section className="panel">
             <State query={tasks}>
               {!tasks.data?.items.length ? (
-                <Empty text="No tasks yet. Create the first task for this property." />
+                <Empty text="No task history for this property." />
               ) : (
                 <div className="task-list">
                   {tasks.data?.items.map((t) => (
@@ -276,53 +229,22 @@ export default function Operations() {
                         <h3>{t.title}</h3>
                         <small>Updated {time(t.updated_at)}</small>
                       </div>
-                      <label>
-                        Assign to
-                        <select
-                          disabled={busy || user.role === "it"}
-                          value={t.assignee || ""}
-                          onChange={(e) =>
-                            void mutate(
-                              "/tasks/" + t.id,
-                              {
-                                propertyId,
-                                status: t.status,
-                                assignee: e.target.value || null,
-                              },
-                              "PATCH",
-                            )
-                          }
-                        >
-                          <option value="">Unassigned</option>
-                          {assignees.data?.items.map((a) => (
-                            <option key={a.id} value={a.id}>
-                              {a.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Status
-                        <select
-                          disabled={busy || user.role === "it"}
-                          value={t.status}
-                          onChange={(e) =>
-                            void mutate(
-                              "/tasks/" + t.id,
-                              {
-                                propertyId,
-                                status: e.target.value,
-                                assignee: t.assignee,
-                              },
-                              "PATCH",
-                            )
-                          }
-                        >
-                          <option value="open">Open</option>
-                          <option value="acknowledged">Acknowledged</option>
-                          <option value="done">Done</option>
-                        </select>
-                      </label>
+                      <dl>
+                        <div>
+                          <dt>Assigned to</dt>
+                          <dd>
+                            {assignees.data?.items.find(
+                              (a) => a.id === t.assignee,
+                            )?.name ||
+                              t.assignee ||
+                              "Unassigned"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Status</dt>
+                          <dd>{t.status}</dd>
+                        </div>
+                      </dl>
                     </article>
                   ))}
                 </div>
@@ -359,37 +281,6 @@ export default function Operations() {
                     </div>
                     <p>{r.attention || "Ready for the next guest"}</p>
                     <small>{time(r.updated_at)}</small>
-                    {[
-                      "platform_admin",
-                      "group_admin",
-                      "hotel_manager",
-                      "housekeeping",
-                    ].includes(user.role) && (
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void mutate(
-                            "/rooms/" + r.id,
-                            {
-                              propertyId,
-                              status:
-                                r.status === "inspected"
-                                  ? "dirty"
-                                  : "inspected",
-                              attention:
-                                r.status === "inspected"
-                                  ? "Inspection required"
-                                  : "",
-                            },
-                            "PATCH",
-                          )
-                        }
-                      >
-                        {r.status === "inspected"
-                          ? "Mark dirty"
-                          : "Mark inspected"}
-                      </button>
-                    )}
                   </div>
                 ))}
               </div>
@@ -437,13 +328,9 @@ export default function Operations() {
                   </div>
                 ))}
               </dl>
-              <Link
-                className="button primary"
-                to="/operations/tasks"
-                onClick={() => setSelected("")}
-              >
-                Create a related task <Plus size={16} />
-              </Link>
+              <p className="helper">
+                Read-only reservation snapshot. No Oracle actions are available.
+              </p>
             </State>
           </section>
         </div>

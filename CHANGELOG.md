@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - Strict OHIP read-only V1 (2026-10-28)
+
+- Locked backend configuration to OHIP_ACCESS_MODE=read_only and OHIP_MUTATIONS_ENABLED=false, with safe defaults and startup rejection of any enabling value.
+- Centralized outbound HTTP policy validates approved operation identity, exact method/path/headers/body semantics, assigned gateway, tenant/property/connection/Hotel ID and fresh server-side authorization before dispatch. Unknown operations default to HTTP 403 OHIP_READ_ONLY_POLICY.
+- Retained OCIM authentication and bounded POST reservation search; approved only the explicitly side-effect-disabled getReservation GET shape. All mutations, GraphQL and arbitrary Oracle/proxy requests remain blocked.
+- Removed task/housekeeping write controls and related-task creation from operational UI, added OHIP READ ONLY and an in-house guest navigation link, and kept local administrative connection management.
+- Restricted legacy task/room mutation APIs to local non-Oracle/demo properties for backwards compatibility and fixture tests; no legacy API forwards an Oracle write.
+- Preserved polling, OAuth refresh, encrypted credentials and scoped WebSocket notifications; added bounded scoped response caching/deduplication, immediate authorization rechecks, and per-property snapshot freshness. Workspace events are no longer labeled Oracle syncs.
+- Added policy, direct-API, polling, stale-data and read-only UI regressions without removing the existing 95 tests. No stored credentials or database schema changed; no live Oracle mutation was used for testing.
+
+
 ## Unreleased - OHIP OCIM Connection Center (2026-10-27)
 
 - Replaced the connection form with exactly six parameters: baseUrl, clientId, clientSecret, appKey, enterpriseId and hotelId. Removed Chain Mapping and additional required mode/environment/scope inputs.

@@ -1,5 +1,7 @@
 # Operational features and Oracle boundaries
 
+V1 is now locked to **OHIP READ ONLY**. Operational task/housekeeping writes are absent from UI; legacy local DEMO APIs remain only for compatibility/internal fixture changes and never forward Oracle mutations. Oracle-mapped property writes are rejected. See [strict policy and approved endpoint inventory](OHIP_READ_ONLY_POLICY.md).
+
 ## Working features
 
 - Morning briefing with source timestamps; arrivals, departures, VIP and in-house counts drill into filtered reservations. Search by confirmation/guest name, arrival and status; paginated reservation detail.

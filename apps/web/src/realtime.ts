@@ -32,8 +32,8 @@ export function useRealtime(user: Identity) {
         lastMessage = Date.now();
         const event = JSON.parse(e.data);
         sequence = Math.max(sequence, Number(event.seq) || 0);
-        setLastSync(new Date().toISOString());
         if (event.topic === "heartbeat") return;
+        setLastSync(new Date().toISOString());
         if (event.topic === "reconcile") {
           void reconcile();
           return;
@@ -51,6 +51,7 @@ export function useRealtime(user: Identity) {
                 [
                   "integrations",
                   "connections",
+                  "ohip-connections",
                   "integration-logs",
                   "retry-jobs",
                   "audit-logs",

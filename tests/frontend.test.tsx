@@ -237,3 +237,78 @@ describe("realtime browser protocol", () => {
     expect(sockets[1].url).toContain("after=42");
   });
 });
+
+describe("strict monitoring-only operational UI", () => {
+  it("always displays the OHIP read-only indicator", () => {
+    wrap(<Shell user={user} />);
+    expect(
+      screen.getByText("OHIP READ ONLY", { exact: true }),
+    ).toBeInTheDocument();
+  });
+  it.each(["tasks", "rooms"])(
+    "removes operational write controls from %s",
+    async (section) => {
+      const { Routes, Route } = await import("react-router-dom");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            items:
+              section === "tasks"
+                ? [
+                    {
+                      id: "task",
+                      title: "Historical task",
+                      priority: "normal",
+                      status: "open",
+                      assignee: null,
+                    },
+                  ]
+                : [
+                    {
+                      id: "101",
+                      status: "dirty",
+                      attention: "Inspection pending",
+                    },
+                  ],
+            total: 1,
+          }),
+        ),
+      );
+      render(
+        <QueryClientProvider
+          client={
+            new QueryClient({ defaultOptions: { queries: { retry: false } } })
+          }
+        >
+          <MemoryRouter initialEntries={[`/operations/${section}`]}>
+            <Context.Provider
+              value={{ user, propertyId: "demo-1", date: "2026-10-28" }}
+            >
+              <Routes>
+                <Route path="/operations/:section" element={<Operations />} />
+              </Routes>
+            </Context.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await screen.findByText(
+        section === "tasks" ? "Historical task" : "Inspection pending",
+      );
+      for (const name of [
+        "Add task",
+        "Mark inspected",
+        "Mark dirty",
+        "Create a related task",
+      ])
+        expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Assign to")).not.toBeInTheDocument();
+      expect(
+        vi
+          .mocked(fetch)
+          .mock.calls.every((c) => !c[1]?.method || c[1].method === "GET"),
+      ).toBe(true);
+    },
+  );
+});

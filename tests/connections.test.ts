@@ -471,4 +471,120 @@ describe("OCIM connection center", () => {
       ),
     ).toHaveLength(1);
   });
+  it.each([
+    ["POST", "/api/ohip-proxy"],
+    ["POST", "/api/ohip/request"],
+    ["GET", "/api/ohip/unknown"],
+    ["POST", "/api/graphql"],
+    ["POST", "/api/reservations"],
+    ["DELETE", "/api/reservations/123"],
+    ["POST", "/api/reservations/123/cancel"],
+    ["POST", "/api/reservations/123/check-in"],
+    ["POST", "/api/reservations/123/check-out"],
+    ["PUT", "/api/guest-profiles/123"],
+    ["PUT", "/api/ohip/hsk/v1/hotels/HOTEL_A/rooms/123"],
+  ])(
+    "blocks direct Oracle/proxy request %s %s with a stable 403 and zero outbound requests",
+    async (method, url) => {
+      const start = calls.length;
+      const result = await app.inject({
+        method: method as any,
+        url,
+        headers: admin,
+        ...(method !== "GET"
+          ? {
+              payload: {
+                method: "PUT",
+                path: "/reservations",
+                operationId: "postReservation",
+                query: "mutation { cancel }",
+                OHIP_MUTATIONS_ENABLED: true,
+              },
+            }
+          : {}),
+      });
+      expect(result.statusCode, result.body).toBe(403);
+      expect(result.json().error).toBe("OHIP_READ_ONLY_POLICY");
+      expect(calls).toHaveLength(start);
+    },
+  );
+  it("denies legacy operational writes on an Oracle property and exposes only approved operation metadata", async () => {
+    const p = await property(),
+      id = (await create(body(p))).json().id;
+    expect(id).toBeTruthy();
+    const before = calls.length;
+    for (const [method, url, payload] of [
+      [
+        "POST",
+        "/api/tasks",
+        { propertyId: p, title: "Must not write", priority: "normal" },
+      ],
+      [
+        "PATCH",
+        "/api/rooms/123",
+        { propertyId: p, status: "dirty", attention: "Must not write" },
+      ],
+    ] as const) {
+      const result = await app.inject({ method, url, headers: admin, payload });
+      expect(result.statusCode, result.body).toBe(403);
+      expect(result.json().error).toBe("OHIP_READ_ONLY_POLICY");
+    }
+    expect(calls).toHaveLength(before);
+    const policy = await app.inject({
+      url: "/api/ohip-policy",
+      headers: admin,
+    });
+    expect(policy.statusCode).toBe(200);
+    expect(policy.json()).toMatchObject({
+      accessMode: "read_only",
+      mutationsEnabled: false,
+    });
+    expect(Object.keys(policy.json().operations).sort()).toEqual([
+      "getReservation",
+      "oauth_token",
+      "searchHotelReservations",
+    ]);
+  });
+  it("default polling passes the centralized client and never issues Oracle mutations", async () => {
+    const p = await property(),
+      value = body(p);
+    expect((await create(value)).statusCode).toBe(200);
+    await db.query(sql`DELETE FROM retry_jobs`);
+    await db.query(
+      sql`UPDATE connections SET next_poll=now()+interval '1 day'`,
+    );
+    await db.query(
+      sql`UPDATE connections SET next_poll=now() WHERE property_id=${p}`,
+    );
+    const start = calls.length;
+    vi.stubGlobal("fetch", transport);
+    try {
+      await worker(db).tick();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const outgoing = calls.slice(start);
+    expect(outgoing.length).toBeGreaterThanOrEqual(3);
+    for (const request of outgoing) {
+      expect(request.options.method).toBe("POST");
+      expect(request.options.redirect).toBe("error");
+      expect(
+        request.url.endsWith("/oauth/v1/tokens") ||
+          request.url.endsWith("/rsv/v1/hotels/HOTEL_A/reservations/searches"),
+      ).toBe(true);
+    }
+    const summary = await app.inject({
+      url: `/api/overview?propertyId=${p}`,
+      headers: admin,
+    });
+    expect(summary.json().items[0]).toMatchObject({ freshness: "synced" });
+    await db.query(
+      sql`UPDATE connections SET last_sync=now()-interval '1 hour' WHERE property_id=${p}`,
+    );
+    const stale = await app.inject({
+      url: `/api/overview?propertyId=${p}`,
+      headers: admin,
+    });
+    expect(stale.json().items[0].freshness).toBe("stale");
+  }, 30000);
 });

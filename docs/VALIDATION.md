@@ -1,6 +1,33 @@
+# Strict OHIP read-only validation - 2026-10-28
+
+All checks below were performed locally. Oracle responses are mocked by default; no mutating request or test reservation was sent to a customer Oracle gateway. The original configured database and saved credentials were not changed for these tests.
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| npm install | PASS | Offline installation, no dependency changes; no vulnerability audit claimed |
+| Lint / build | PASS | npm run lint; strict TypeScript + Vite + compiled Fastify build |
+| Regression suite | PASS | 130 tests / 10 files, retaining all 95 prior cases; same suite passes against isolated PostgreSQL schemas |
+| Operation policy | PASS | Approved GET flags, bounded search POST and OAuth accepted; unknown/mutating operations, GraphQL, unsafe GET variants and method/body overrides denied before transport |
+| Authorization | PASS | Tenant/property/connection/Hotel ID mismatch, gateway mismatch, missing/false authorization and revocation before dispatch/cache access rejected |
+| Direct API enforcement | PASS | Oracle/proxy namespaces and business-write API attempts return 403 OHIP_READ_ONLY_POLICY with zero outbound calls |
+| Polling / cache | PASS | Default worker uses only the approved client operations; dedup/cache remains scoped; stale-data detection verified |
+| Operational UI | PASS | OHIP READ ONLY visible; no task creation/assignment/status or housekeeping write controls; six-field Connection Manager retained |
+| Actual npm start | PASS | Started with an isolated empty embedded database, checked health and nested SPA, and confirmed local proxy/write attempt returns 403 |
+| Native embedded / native PostgreSQL / Docker | PASS | 19 deployment checks; same built frontend, authenticated WebSocket updates/reconnect, task-history/session persistence and six-field connection UI |
+| PostgreSQL durability | PASS | Test DB container recreated while keeping its volume; stored task history retained |
+| Config / resources | PASS | Root .env restored with strict flags; no credential rotation; isolated test containers/volumes cleaned |
+
+The browser harness now simulates internal DEMO history/cache changes through authenticated local fixture APIs to verify realtime and durability. It does not reintroduce operational write controls or call Oracle. Legacy local task/room writes are rejected for Oracle-mapped properties.
+
+Exact allowed endpoints, blocked endpoint families, OAuth local alias, GET side-effect restrictions and classification limits are documented in [OHIP_READ_ONLY_POLICY.md](OHIP_READ_ONLY_POLICY.md). No live Oracle acceptance, production deployment or remote push is claimed.
+
+---
+
+The earlier configuration/OCIM verification below is historical; its task-edit UI coverage predates removal of those operational controls.
+
 # Validation — centralized configuration and deployment
 
-Executed locally on 2026-10-27 (Asia/Jakarta), Windows / Node.js 24.14.1, Chromium browser through Playwright, Docker Desktop Linux containers, and PostgreSQL 17. This report describes the configuration changes in the current source tree.
+Executed locally on 2026-10-27 (Asia/Jakarta), Windows / Node.js 24.14.1, Chromium browser through Playwright, Docker Desktop Linux containers, and PostgreSQL 17. Historical report for the configuration/OCIM changes before strict read-only UI enforcement.
 
 | Check | Result | Evidence |
 | --- | --- | --- |

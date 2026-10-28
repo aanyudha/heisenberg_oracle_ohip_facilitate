@@ -2,6 +2,21 @@
 
 Konfigurasi runtime berada di **satu file `.env` pada root project**. Kredensial tidak perlu diubah di source code atau Compose. Fastify menyajikan React SPA, REST API, OpenAPI, dan WebSocket terautentikasi melalui satu port, default **http://localhost:3000**.
 
+## Strict OHIP read-only V1
+
+Aplikasi ini adalah **OHIP READ-ONLY OPERATIONAL DASHBOARD**, bukan PMS write client. Indikator **OHIP READ ONLY** selalu ditampilkan. Form/action operasional untuk membuat task, mengubah housekeeping, check-in/out, cancel, posting atau menulis data Oracle tidak tersedia. Connection Manager dan administrasi lokal tetap diizinkan.
+
+```dotenv
+OHIP_ACCESS_MODE=read_only
+OHIP_MUTATIONS_ENABLED=false
+```
+
+Keduanya default ke nilai aman jika tidak ditentukan; nilai lain ditolak saat startup. Policy HTTP pusat tetap default-deny meskipun parameter pengguna atau environment diubah. Hanya OAuth Client Credentials, POST `searchHotelReservations` yang dibatasi, dan varian GET `getReservation` yang telah diaudit boleh melewati policy. GET reservation wajib menonaktifkan `markAsRecentlyAccessed` dan `includeInSession`; GET lain tidak otomatis aman. V1 tetap menampilkan reservation details dari cache lokal, tanpa menambahkan endpoint live baru.
+
+Semua mutasi Oracle, GraphQL dan arbitrary proxy ditolak dengan **403 `OHIP_READ_ONLY_POLICY`** sebelum transport dipanggil. Polling mempertahankan rate limit, scoped deduplication/cache, retry baca aman dan WebSocket. Timestamp event WebSocket bukan timestamp sinkronisasi Oracle; dashboard menampilkan waktu sync per properti dan status snapshot `demo`, `not_synced`, `synced`, atau `stale`.
+
+[Daftar endpoint, batas semantics, pengecualian OAuth, dan bukti pengujian](docs/OHIP_READ_ONLY_POLICY.md). Tidak ada perubahan credentials tersimpan atau schema database untuk penguncian read-only ini.
+
 ## Setup
 
 Gunakan Node.js 24/npm untuk native, atau Docker Engine dengan Compose untuk Docker.

@@ -7,6 +7,7 @@ import {
   classify,
   type OperationsAdapter,
 } from "./ohip.js";
+import { OhipReadOnlyError, POLICY_CODE } from "./ohip-policy.js";
 import { appendEvent } from "./realtime.js";
 export const backoff = (attempt: number, random = Math.random()) =>
   Math.min(300000, 1000 * 2 ** Math.min(attempt, 10)) +
@@ -39,11 +40,28 @@ export function worker(
     const a =
       c.mode === "demo"
         ? new MockAdapter()
-        : new RealOhipAdapter(c, fetch, async (e) => {
-            await db.query(
-              sql`INSERT INTO integration_logs(id,tenant_id,property_id,operation,status,latency,classification,correlation_id) VALUES (${randomUUID()},${c.tenant_id},${c.property_id},${e.operation},${e.status},${e.latency},${e.classification},${e.correlationId})`,
-            );
-          });
+        : new RealOhipAdapter(
+            c,
+            fetch,
+            async (e) => {
+              await db.query(
+                sql`INSERT INTO integration_logs(id,tenant_id,property_id,operation,status,latency,classification,correlation_id) VALUES (${randomUUID()},${c.tenant_id},${c.property_id},${e.operation},${e.status},${e.latency},${e.classification},${e.correlationId})`,
+              );
+            },
+            {
+              tenantId: c.tenant_id,
+              propertyId: c.property_id,
+              connectionId: c.connection_id,
+              hotelId: c.hotel_id,
+              cacheTtlMs: 5000,
+              authorize: async () =>
+                !!(
+                  await db.query(
+                    sql`SELECT 1 FROM connections s JOIN ohip_connection_properties m ON m.tenant_id=s.tenant_id AND m.property_id=s.property_id JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE s.tenant_id=${c.tenant_id} AND s.property_id=${c.property_id} AND s.mode='real' AND m.connection_id=${c.connection_id} AND m.hotel_id=${c.hotel_id} AND m.validation_status='validated' AND o.updated_at::text=${c.credential_revision}`,
+                  )
+                ).length,
+            },
+          );
     adapters.set(c.id, { secret: revision, adapter: a });
     return a;
   }
@@ -160,12 +178,14 @@ export function worker(
           });
         } catch (error) {
           const e =
-            error instanceof OhipError
-              ? error
-              : new OhipError(
-                  0,
-                  error instanceof TypeError ? "network" : "contract",
-                );
+            error instanceof OhipReadOnlyError
+              ? new OhipError(403, POLICY_CODE)
+              : error instanceof OhipError
+                ? error
+                : new OhipError(
+                    0,
+                    error instanceof TypeError ? "network" : "contract",
+                  );
           const attempts = job.attempts + 1;
           const retry =
             [0, 429, 500, 502, 503, 504].includes(e.status) &&
@@ -174,7 +194,10 @@ export function worker(
             await tx.execute(
               sql`UPDATE retry_jobs SET state=${retry ? "queued" : "dead"},attempts=${attempts},next_at=now()+${Math.max(backoff(attempts), e.retryAfter)}*interval '1 millisecond',last_error=${e.classification},lease_until=NULL WHERE id=${job.id}`,
             );
-            if (e.classification !== "connection_changed")
+            if (
+              e.classification !== "connection_changed" &&
+              e.classification !== POLICY_CODE
+            )
               await tx.execute(
                 sql`UPDATE connections SET status='degraded' WHERE tenant_id=${job.tenant_id} AND property_id=${job.property_id}`,
               );

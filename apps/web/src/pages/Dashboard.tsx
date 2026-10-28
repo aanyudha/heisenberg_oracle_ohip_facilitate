@@ -53,7 +53,13 @@ export default function Dashboard() {
                 ? "Sample hotel data. Oracle ingestion is not active."
                 : `OHIP status: ${s?.connection || "not configured"}. Polling source; streaming is not active.`}
             </p>
-            <small>Source updated {time(s?.lastSync)}</small>
+            <small>
+              {s?.source === "demo"
+                ? "Sample adapter checked"
+                : "Last successful Oracle sync"}{" "}
+              {time(s?.lastSync)}. Snapshot status:{" "}
+              {s?.freshness || "not verified"}.
+            </small>
           </div>
           <div className="metric-grid">
             {[
@@ -158,7 +164,7 @@ export default function Dashboard() {
                 )}
               </State>
               <Link className="panel-link" to="/operations/tasks">
-                Manage priority tasks <ArrowUpRight size={16} />
+                View priority tasks <ArrowUpRight size={16} />
               </Link>
             </section>
             <section className="panel readiness">

@@ -2,16 +2,17 @@ import { z } from "zod";
 import type { Reservation } from "@hospitality/contracts";
 import { decrypt } from "./security.js";
 import { createHash } from "node:crypto";
-import { isIP } from "node:net";
+import { OhipError, classify, validateGateway } from "./ohip-gateway.js";
+export { OhipError, classify, validateGateway } from "./ohip-gateway.js";
+import { OhipHttpClient, OCIM_SCOPE, type OhipScope } from "./ohip-policy.js";
+export { OCIM_SCOPE } from "./ohip-policy.js";
 import { credentials } from "./connection-store.js";
-export const OCIM_SCOPE = "urn:opc:hgbu:ws:__myscopes__";
 type TokenState = {
   token: string;
   expires: number;
   refreshing: Promise<void> | null;
 };
 const tokenCaches = new WeakMap<object, Map<string, TokenState>>();
-let nextRequestAt = 0;
 export function retryAfter(response: Response) {
   const value = response.headers.get("retry-after");
   if (value === null) return 0;
@@ -26,27 +27,6 @@ export function retryAfter(response: Response) {
     ) || 0,
   );
 }
-export class OhipError extends Error {
-  constructor(
-    public status: number,
-    public classification: string,
-    public retryAfter = 0,
-  ) {
-    super(classification);
-  }
-}
-export const classify = (status: number) =>
-  status === 401
-    ? "authentication"
-    : status === 403
-      ? "permission"
-      : status === 429
-        ? "throttled"
-        : status >= 500
-          ? "upstream"
-          : status === 0
-            ? "network"
-            : "contract";
 const info = z.object({
   reservationIdList: z.array(z.object({ id: z.string(), type: z.string() })),
   reservationStatus: z.string(),
@@ -115,36 +95,9 @@ export class MockAdapter implements OperationsAdapter {
     return { items: [], status: 200 };
   }
 }
-export function validateGateway(gateway: string) {
-  let url: URL;
-  try {
-    url = new URL(gateway);
-  } catch {
-    throw new OhipError(400, "gateway_not_allowed");
-  }
-  const allowed = (process.env.OHIP_ALLOWED_HOSTS || "")
-    .split(",")
-    .map((host) => host.trim())
-    .filter(Boolean);
-  if (
-    url.protocol !== "https:" ||
-    isIP(url.hostname.replace(/^\[|\]$/g, "")) !== 0 ||
-    url.hostname === "localhost" ||
-    url.hostname.endsWith(".localhost") ||
-    url.hostname.endsWith(".local") ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.search ||
-    url.hash ||
-    url.pathname !== "/" ||
-    !allowed.includes(url.hostname)
-  )
-    throw new OhipError(400, "gateway_not_allowed");
-  return url.origin;
-}
 export class RealOhipAdapter implements OperationsAdapter {
   private state: TokenState;
+  private http: OhipHttpClient;
   private base: string;
   private secret: {
     clientId: string;
@@ -154,9 +107,27 @@ export class RealOhipAdapter implements OperationsAdapter {
   constructor(
     private connection: Record<string, any>,
     private transport: typeof fetch = fetch,
-    private telemetry?: (event: Telemetry) => Promise<void>,
+    telemetry?: (event: Telemetry) => Promise<void>,
+    scope?: OhipScope,
   ) {
     this.base = validateGateway(connection.base_url || connection.gateway);
+    const route: Record<string, any> = {
+      ...connection,
+      connection_id: connection.connection_id || connection.id,
+    };
+    const authorization = scope || {
+      tenantId: route.tenant_id,
+      propertyId: route.property_id,
+      connectionId: route.connection_id,
+      hotelId: route.hotel_id,
+      authorize: route.authorize,
+    };
+    this.http = new OhipHttpClient(
+      route as any,
+      authorization,
+      transport,
+      telemetry,
+    );
     if (connection.encrypted_client_secret) {
       const value = credentials(connection);
       this.secret = {
@@ -200,35 +171,16 @@ export class RealOhipAdapter implements OperationsAdapter {
     }
   }
   private async request(path: string, options: RequestInit, operation: string) {
-    validateGateway(this.base);
-    if (this.transport === fetch) {
-      const wait = Math.max(0, nextRequestAt - Date.now());
-      nextRequestAt =
-        Math.max(Date.now(), nextRequestAt) +
-        Math.max(250, Number(process.env.OHIP_REQUEST_INTERVAL_MS) || 250);
-      if (wait) await new Promise((r) => setTimeout(r, wait));
-    }
-    const start = Date.now(),
-      correlationId = crypto.randomUUID();
-    let status = 0;
     try {
-      const response = await this.transport(this.base + path, {
-        ...options,
-        headers: { ...options.headers, "x-request-id": correlationId },
-      });
-      status = response.status;
-      return response;
-    } catch {
+      return await this.http.request(this.base, path, options, operation);
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        ("statusCode" in error || error instanceof OhipError)
+      )
+        throw error;
       throw new OhipError(0, "network");
-    } finally {
-      await this.telemetry?.({
-        operation,
-        status,
-        latency: Date.now() - start,
-        correlationId,
-        classification:
-          status >= 200 && status < 300 ? "success" : classify(status),
-      });
     }
   }
   private async authenticate() {

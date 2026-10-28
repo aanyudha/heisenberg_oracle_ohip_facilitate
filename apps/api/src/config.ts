@@ -63,6 +63,8 @@ const schema = z.strictObject({
     .optional(),
   DEMO_SEED: z.enum(["true", "false"]).default("false"),
   DEMO_PASSWORD: z.string().min(12).max(256).optional(),
+  OHIP_ACCESS_MODE: z.literal("read_only").default("read_only"),
+  OHIP_MUTATIONS_ENABLED: z.literal("false").default("false"),
   OHIP_ALLOWED_HOSTS: z.string().default(""),
   POLL_INTERVAL_MS: z
     .string()
@@ -227,6 +229,8 @@ export function loadConfig(
     demoPassword: env.DEMO_PASSWORD,
     encryptionKey: env.ENCRYPTION_KEY,
     allowedHosts: env.OHIP_ALLOWED_HOSTS,
+    ohipAccessMode: env.OHIP_ACCESS_MODE,
+    ohipMutationsEnabled: env.OHIP_MUTATIONS_ENABLED,
     pollInterval: env.POLL_INTERVAL_MS,
     requestInterval: env.OHIP_REQUEST_INTERVAL_MS,
   };
@@ -237,6 +241,8 @@ export function applyConfig(config: AppConfig) {
   process.env.COOKIE_SECURE = config.cookieSecure;
   process.env.ENCRYPTION_KEY = config.encryptionKey || "";
   process.env.OHIP_ALLOWED_HOSTS = config.allowedHosts;
+  process.env.OHIP_ACCESS_MODE = config.ohipAccessMode;
+  process.env.OHIP_MUTATIONS_ENABLED = config.ohipMutationsEnabled;
   process.env.POLL_INTERVAL_MS = String(config.pollInterval);
   process.env.OHIP_REQUEST_INTERVAL_MS = String(config.requestInterval);
 }

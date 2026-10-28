@@ -5,6 +5,7 @@ import { sql, type Database } from "./db.js";
 import { canAdmin, canIntegrate } from "@hospitality/contracts";
 import { type Principal, appendEvent } from "./realtime.js";
 import { encrypt } from "./security.js";
+import { OhipReadOnlyError } from "./ohip-policy.js";
 import { RealOhipAdapter, OhipError, validateGateway } from "./ohip.js";
 import {
   credentials,
@@ -138,7 +139,8 @@ export function registerConnectionCenter(
       {
         ...row,
         tenant_id: u.tenantId,
-        connection_id: row.id || row.connection_id,
+        property_id: p,
+        connection_id: row.id || row.connection_id || "credential-validation",
         hotel_id: hotelId,
       },
       transport,
@@ -146,6 +148,20 @@ export function registerConnectionCenter(
         await db.query(
           sql`INSERT INTO integration_logs(id,tenant_id,property_id,operation,status,latency,classification,correlation_id) VALUES (${randomUUID()},${u.tenantId},${p},${e.operation},${e.status},${e.latency},${e.classification},${e.correlationId})`,
         );
+      },
+      {
+        tenantId: u.tenantId,
+        propertyId: p,
+        connectionId: row.id || row.connection_id || "credential-validation",
+        hotelId,
+        authorize: async () => {
+          const actor = (
+            await db.query(
+              sql`SELECT m.role FROM memberships m JOIN property_grants g ON g.tenant_id=m.tenant_id AND g.user_id=m.user_id JOIN sessions s ON s.tenant_id=m.tenant_id AND s.user_id=m.user_id WHERE m.tenant_id=${u.tenantId} AND m.user_id=${u.id} AND g.property_id=${p} AND s.token_hash=${u.tokenHash} AND s.expires_at>now()`,
+            )
+          )[0];
+          return !!actor && canIntegrate(actor.role);
+        },
       },
     ).testConnection();
   }
@@ -329,6 +345,7 @@ export function registerConnectionCenter(
     } catch (error) {
       failure = error;
     }
+    if (failure instanceof OhipReadOnlyError) throw failure;
     await db.orm.transaction(async (tx) => {
       await lock(tx, u.tenantId);
       await assertUnchanged(tx, u, row);

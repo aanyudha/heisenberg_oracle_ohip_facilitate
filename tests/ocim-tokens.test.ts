@@ -9,6 +9,8 @@ function connection(
 ) {
   return {
     tenant_id: tenant,
+    property_id: "test-property",
+    authorize: async () => true,
     connection_id: id,
     base_url: gateway,
     client_id: "client",

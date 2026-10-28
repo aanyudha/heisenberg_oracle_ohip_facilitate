@@ -18,6 +18,11 @@ import {
 } from "@hospitality/contracts";
 import { OhipError } from "./ohip.js";
 import { registerConnectionCenter } from "./connections.js";
+import {
+  blockedOracleApi,
+  OhipReadOnlyError,
+  APPROVED_OHIP_OPERATIONS,
+} from "./ohip-policy.js";
 import { documentRoutes } from "./openapi.js";
 declare module "fastify" {
   interface FastifyRequest {
@@ -37,6 +42,9 @@ export async function buildApp(
   options: { ohipTransport?: typeof fetch } = {},
 ) {
   const app = Fastify({ logger: false, bodyLimit: 65536, trustProxy: false });
+  app.addHook("onRequest", async (req) => {
+    if (blockedOracleApi(req.method, req.url)) throw new OhipReadOnlyError();
+  });
   const rt = realtime(db);
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -63,7 +71,10 @@ export async function buildApp(
       security: [{ session: [] }],
     },
   });
-  await app.register(swaggerUi, { routePrefix: "/docs" });
+  await app.register(swaggerUi, {
+    routePrefix: "/docs",
+    uiConfig: { supportedSubmitMethods: ["get"] },
+  });
   documentRoutes(app);
   app.setErrorHandler((error, _req, reply) => {
     const e = error as Error & { statusCode?: number };
@@ -161,6 +172,24 @@ export async function buildApp(
       sql`INSERT INTO audit_logs VALUES (${randomUUID()},${u.tenantId},${p},${u.id},${action},${target},now())`,
     );
   }
+  async function localDemoOnly(u: Principal, p: string) {
+    if (
+      (
+        await db.query(
+          sql`SELECT 1 FROM connections WHERE tenant_id=${u.tenantId} AND property_id=${p} AND mode='real' UNION ALL SELECT 1 FROM ohip_connection_properties WHERE tenant_id=${u.tenantId} AND property_id=${p} LIMIT 1`,
+        )
+      ).length
+    )
+      throw new OhipReadOnlyError();
+  }
+  app.get("/api/ohip-policy", async (req) => {
+    requireRole(canIntegrate(req.principal.role));
+    return {
+      accessMode: "read_only",
+      mutationsEnabled: false,
+      operations: APPROVED_OHIP_OPERATIONS,
+    };
+  });
   app.get("/api/health", async () => ({ status: "ok" }));
   app.get("/api/branding", async (req) => {
     const host = req.hostname;
@@ -317,6 +346,7 @@ export async function buildApp(
     if (q.propertyId) property(u, q.propertyId);
     const rows =
       await db.query(sql`SELECT p.id,p.name,p.organization_id,p.timezone,c.status AS connection,c.last_sync AS "lastSync",c.mode AS source,
+      CASE WHEN c.mode='demo' THEN 'demo' WHEN c.last_sync IS NULL THEN 'not_synced' WHEN c.status!='connected' OR c.last_sync<now()-${Math.max(180000, (Number(process.env.POLL_INTERVAL_MS) || 60000) * 3)}*interval '1 millisecond' THEN 'stale' ELSE 'synced' END AS freshness,
       (SELECT count(*)::int FROM reservations r WHERE r.tenant_id=p.tenant_id AND r.property_id=p.id AND r.arrival=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.status NOT IN ('Cancelled','NoShow')) AS arrivals,
       (SELECT count(*)::int FROM reservations r WHERE r.tenant_id=p.tenant_id AND r.property_id=p.id AND r.departure=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.status NOT IN ('Cancelled','NoShow')) AS departures,
       (SELECT count(*)::int FROM reservations r WHERE r.tenant_id=p.tenant_id AND r.property_id=p.id AND r.arrival<=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.departure>=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.status IN ('InHouse','DueOut')) AS "inHouse",
@@ -438,6 +468,7 @@ export async function buildApp(
         .parse(req.body),
       p = property(u, b.propertyId),
       tid = randomUUID();
+    await localDemoOnly(u, p);
     await db.orm.transaction(async (tx) => {
       await tx.execute(
         sql`INSERT INTO tasks(id,tenant_id,property_id,title,priority) VALUES (${tid},${u.tenantId},${p},${b.title},${b.priority})`,
@@ -468,6 +499,7 @@ export async function buildApp(
       ).length
     )
       throw fail(400, "Assignee has no property access");
+    await localDemoOnly(u, p);
     await db.orm.transaction(async (tx) => {
       const r = await tx.execute(
         sql`UPDATE tasks SET status=${b.status},assignee=${b.assignee},updated_at=now() WHERE id=${tid} AND tenant_id=${u.tenantId} AND property_id=${p} RETURNING id`,
@@ -512,6 +544,7 @@ export async function buildApp(
         .parse(req.body),
       p = property(u, b.propertyId),
       rid = id.parse((req.params as any).id);
+    await localDemoOnly(u, p);
     await db.orm.transaction(async (tx) => {
       const result = await tx.execute(
         sql`UPDATE rooms SET status=${b.status},attention=${b.attention},updated_at=now() WHERE tenant_id=${u.tenantId} AND property_id=${p} AND id=${rid} RETURNING id`,
@@ -840,6 +873,9 @@ export async function buildApp(
     requireRole(req.principal.developer);
     return {
       coreVersion: "1.0.0",
+      ohipAccessMode: "read_only",
+      ohipMutationsEnabled: false,
+      approvedOhipOperations: Object.keys(APPROVED_OHIP_OPERATIONS).join(", "),
       contract: "Oracle RSV 26.2 / 26.3",
       compatibility:
         "Fixtures validated against release tags 26.2, 26.3, v26.4 (RSV schema remains 26.3); live environments unverified",

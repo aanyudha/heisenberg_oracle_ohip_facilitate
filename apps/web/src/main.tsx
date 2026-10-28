@@ -160,6 +160,7 @@ export function Shell({ user }: { user: Workspace["user"] }) {
               ["/operations/reservations", "Reservations", CalendarDays],
               ["/operations/arrivals", "Arrivals", ArrowDownToLine],
               ["/operations/departures", "Departures", ArrowUpFromLine],
+              ["/operations/inhouse", "In-House Guests", Users],
               ["/operations/guests", "Guest Profiles", Users],
             ] as NavItem[])
           : []),
@@ -324,7 +325,10 @@ export function Shell({ user }: { user: Workspace["user"] }) {
                   onChange={(e) => setDate(e.target.value)}
                 />
               </label>
-              <span className={"connection " + state.toLowerCase()}>
+              <span
+                title="Workspace WebSocket status, not Oracle sync status"
+                className={"connection " + state.toLowerCase()}
+              >
                 <i />
                 {state}
               </span>
@@ -336,13 +340,15 @@ export function Shell({ user }: { user: Workspace["user"] }) {
           <main>
             <div className="sync-strip">
               <span>
+                <strong>OHIP READ ONLY</strong>
+                <br />
                 OPERATIONS /{" "}
                 {location.pathname === "/"
                   ? "MORNING BRIEFING"
                   : location.pathname.split("/")[1]?.toUpperCase()}
               </span>
               <span>
-                Last successful sync{" "}
+                Last workspace event{" "}
                 {lastSync ? new Date(lastSync).toLocaleTimeString() : "—"}
               </span>
             </div>

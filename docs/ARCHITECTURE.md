@@ -1,5 +1,7 @@
 # Architecture and deployment considerations
 
+Outbound Oracle access is default-deny through the centralized read-only policy. Only the documented OCIM token request, bounded reservation POST search and side-effect-disabled reservation GET shape are approved; no PMS mutation or raw proxy is exposed. See [OHIP_READ_ONLY_POLICY.md](OHIP_READ_ONLY_POLICY.md).
+
 ## Components
 
 `apps/api` contains Fastify HTTP/WebSocket transport, cookie sessions/authorization, operational services, Drizzle queries, the polling worker, and separate mock/real adapters. `apps/web` contains the React Router SPA and TanStack Query cache. `packages/contracts` contains shared DTOs and role policies. `db/migrations` is the authoritative PostgreSQL schema. Server deployments use node-postgres; native local demo startup defaults to persistent PGlite. Both deployments run compiled JavaScript and serve built React assets through the same Fastify port; see [deployment boundaries](DEPLOYMENT.md).

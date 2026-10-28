@@ -72,6 +72,7 @@ export type Summary = {
   changes: number;
   connection: string;
   lastSync: string | null;
+  freshness?: "demo" | "not_synced" | "stale" | "synced";
   source: string;
 };
 export const canIntegrate = (role: Role) =>

@@ -14,6 +14,10 @@ beforeEach(() => {
   process.env.OHIP_ALLOWED_HOSTS = "gateway.example.oraclecloud.com";
 });
 const connection = () => ({
+  tenant_id: "test-tenant",
+  property_id: "test-property",
+  connection_id: "test-connection",
+  authorize: async () => true,
   gateway: "https://gateway.example.oraclecloud.com",
   hotel_id: "HOTEL1",
   enterprise_id: "ENTERPRISE",

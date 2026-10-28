@@ -158,25 +158,53 @@ try {
   await page
     .getByRole("heading", { name: "Priority Tasks", exact: true })
     .waitFor();
-  await page.getByLabel("Task title").fill(assignmentTitle);
-  await page.getByRole("button", { name: "Add task" }).click();
-  await page.getByRole("heading", { name: assignmentTitle }).waitFor();
-  const article = page.locator("article").filter({ hasText: assignmentTitle });
-  await article.getByLabel("Assign to").selectOption("demo-frontoffice");
-  await article.getByLabel("Status").selectOption("acknowledged");
-  await page.waitForFunction(
-    (title) =>
-      [...document.querySelectorAll("article")].some(
-        (a) =>
-          a.textContent.includes(title) &&
-          a.querySelector("select")?.value === "demo-frontoffice" &&
-          a.querySelectorAll("select")[1]?.value === "acknowledged",
-      ),
-    assignmentTitle,
-  );
-  // A second browser context simulates a backend change from another user session.
+  if (
+    (await page.getByRole("button", { name: "Add task" }).count()) ||
+    (await page.getByLabel("Task title").count())
+  )
+    throw Error("Operational task write controls must be absent");
+  await page.getByText("OHIP READ ONLY", { exact: true }).waitFor();
   const session = await context.request.get(`http://localhost:${port}/api/me`);
   const identity = await session.json();
+  // Simulate an internal DEMO cache/history change; no Oracle endpoint is called.
+  const created = await context.request.post(
+    `http://localhost:${port}/api/tasks`,
+    {
+      headers: {
+        "x-csrf-token": identity.csrf,
+        origin: `http://localhost:${port}`,
+      },
+      data: {
+        propertyId: "demo-1",
+        title: assignmentTitle,
+        priority: "normal",
+      },
+    },
+  );
+  if (!created.ok()) throw Error("Local DEMO fixture creation failed");
+  const tasks = await (
+    await context.request.get(
+      `http://localhost:${port}/api/tasks?propertyId=demo-1`,
+    )
+  ).json();
+  const task = tasks.items.find((t) => t.title === assignmentTitle);
+  if (!task) throw Error("Local test task not found");
+  const changed = await context.request.patch(
+    `http://localhost:${port}/api/tasks/${task.id}`,
+    {
+      headers: {
+        "x-csrf-token": identity.csrf,
+        origin: `http://localhost:${port}`,
+      },
+      data: {
+        propertyId: "demo-1",
+        status: "acknowledged",
+        assignee: "demo-frontoffice",
+      },
+    },
+  );
+  if (!changed.ok()) throw Error("Local DEMO history update failed");
+  await page.getByRole("heading", { name: assignmentTitle }).waitFor();
   const remote = await context.request.post(
     `http://localhost:${port}/api/tasks`,
     {
@@ -362,7 +390,8 @@ try {
     checks: [
       "login/logout",
       "reservation search/detail",
-      "task create/assign/acknowledge",
+      "local DEMO fixture updates; operational UI remains read-only",
+      "OHIP READ ONLY indicator",
       "websocket-driven update",
       "all menu routes",
       "desktop/tablet/mobile",
@@ -377,12 +406,11 @@ try {
       "runtime secrets never returned through HTTP",
       "OHIP OCIM connection form has exactly six parameters",
     ],
-    database:
-      docker
-        ? "PostgreSQL in Compose persistent volume"
-        : env.DB_TYPE === "postgres"
-          ? "External PostgreSQL reached from native Fastify"
-          : "Isolated persistent embedded PostgreSQL (PGlite)",
+    database: docker
+      ? "PostgreSQL in Compose persistent volume"
+      : env.DB_TYPE === "postgres"
+        ? "External PostgreSQL reached from native Fastify"
+        : "Isolated persistent embedded PostgreSQL (PGlite)",
     screenshots: [
       "artifacts/dashboard-desktop.png",
       "artifacts/dashboard-tablet.png",
