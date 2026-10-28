@@ -186,6 +186,21 @@ try {
   );
   pass("Real PostgreSQL wrong password rejected without leaking secret");
   await configure(pg);
+  const testUrl = new URL(
+    `postgresql://127.0.0.1:${mapped}/config_validation_test`,
+  );
+  testUrl.username = encodeURIComponent(pg.DB_USER);
+  testUrl.password = encodeURIComponent(secret);
+  const postgresTests = await command(
+    process.execPath,
+    ["node_modules/vitest/vitest.mjs", "run"],
+    { TEST_DATABASE_URL: testUrl.toString() },
+  );
+  if (!postgresTests.output.includes("passed"))
+    throw Error("PostgreSQL regression suite did not complete");
+  pass(
+    "Regression suite, OCIM migration and connection isolation pass on real PostgreSQL in isolated schemas",
+  );
   const nativePg = await command(
     process.execPath,
     ["scripts/browser-smoke.mjs"],
@@ -284,9 +299,16 @@ try {
       SMOKE_COMPOSE_PROJECT: project,
       SMOKE_PASSWORD: demoSecret,
     },
-  ).catch(async error => {
-    const logs = await command("docker", [...compose, "logs", "--no-color", "app"], {}, true);
-    throw Error(error.message + "\nApplication logs:\n" + logs.output.slice(-6000));
+  ).catch(async (error) => {
+    const logs = await command(
+      "docker",
+      [...compose, "logs", "--no-color", "app"],
+      {},
+      true,
+    );
+    throw Error(
+      error.message + "\nApplication logs:\n" + logs.output.slice(-6000),
+    );
   });
   if (!dockerSmoke.output.includes('"result": "PASS"'))
     throw Error("Docker smoke incomplete");

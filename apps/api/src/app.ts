@@ -8,12 +8,7 @@ import swaggerUi from "@fastify/swagger-ui";
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { sql, type Database } from "./db.js";
-import {
-  hashToken,
-  verifyPassword,
-  encrypt,
-  hashPassword,
-} from "./security.js";
+import { hashToken, verifyPassword, hashPassword } from "./security.js";
 import { realtime, appendEvent, type Principal } from "./realtime.js";
 import {
   canAdmin,
@@ -21,7 +16,8 @@ import {
   canIntegrate,
   roles,
 } from "@hospitality/contracts";
-import { validateGateway, OhipError } from "./ohip.js";
+import { OhipError } from "./ohip.js";
+import { registerConnectionCenter } from "./connections.js";
 import { documentRoutes } from "./openapi.js";
 declare module "fastify" {
   interface FastifyRequest {
@@ -36,7 +32,10 @@ const pagination = z.object({
 });
 const fail = (statusCode: number, message: string) =>
   Object.assign(new Error(message), { statusCode });
-export async function buildApp(db: Database) {
+export async function buildApp(
+  db: Database,
+  options: { ohipTransport?: typeof fetch } = {},
+) {
   const app = Fastify({ logger: false, bodyLimit: 65536, trustProxy: false });
   const rt = realtime(db);
   await app.register(helmet, {
@@ -540,7 +539,7 @@ export async function buildApp(db: Database) {
       if (q.propertyId) property(u, q.propertyId);
       const columns =
         resource === "connections"
-          ? sql`id,property_id,mode,environment,gateway,hotel_id,chain_code,enterprise_id,status,last_sync,checkpoint`
+          ? sql`id,property_id,mode,environment,status,last_sync,checkpoint`
           : sql`*`;
       const where = sql`tenant_id=${u.tenantId} AND (property_id IN (${scope(u)}) ${resource === "audit_logs" ? sql`OR property_id IS NULL` : sql``}) ${q.propertyId ? sql`AND property_id=${q.propertyId}` : sql``}`;
       return {
@@ -554,61 +553,44 @@ export async function buildApp(db: Database) {
         )[0].total,
       };
     });
+  registerConnectionCenter(app, db, options.ohipTransport);
+  // Retain the demo source switch for existing callers; live credentials use the OCIM center.
   app.put("/api/connections", async (req) => {
     const u = req.principal;
     requireRole(canIntegrate(u.role));
     const b = z
-        .object({
-          propertyId: id,
-          mode: z.enum(["demo", "real"]),
-          environment: z.enum(["DEMO", "sandbox", "production"]),
-          gateway: z.string().max(300).default(""),
-          hotelId: z.string().max(40).default(""),
-          chainCode: z.string().max(40).default(""),
-          enterpriseId: z.string().max(100).default(""),
-          clientId: z.string().max(200).optional(),
-          clientSecret: z.string().max(1000).optional(),
-          applicationKey: z.string().max(1000).optional(),
-        })
-        .parse(req.body),
-      p = property(u, b.propertyId);
-    if (b.mode === "real") {
-      validateGateway(b.gateway);
-      if (
-        !b.clientId ||
-        !b.clientSecret ||
-        !b.applicationKey ||
-        !b.hotelId ||
-        !b.enterpriseId ||
-        b.environment === "DEMO"
-      )
-        throw fail(
-          400,
-          "Real connection requires complete OCIM credentials and mapping",
-        );
-    }
-    if (
-      (
-        await db.query(
-          sql`SELECT 1 FROM reservations WHERE tenant_id=${u.tenantId} AND property_id=${p} AND (source='DEMO')!=${b.mode === "demo"} LIMIT 1`,
-        )
-      ).length
-    )
-      throw fail(
-        409,
-        "Use an empty property when changing between DEMO and Oracle sources",
-      );
-    const secret =
-      b.mode === "real"
-        ? encrypt({
-            clientId: b.clientId,
-            clientSecret: b.clientSecret,
-            applicationKey: b.applicationKey,
-          })
-        : null;
+      .strictObject({
+        propertyId: id,
+        mode: z.literal("demo"),
+        environment: z.literal("DEMO"),
+      })
+      .parse(req.body);
+    const p = property(u, b.propertyId);
     await db.orm.transaction(async (tx) => {
       await tx.execute(
-        sql`INSERT INTO connections(id,tenant_id,property_id,mode,environment,gateway,hotel_id,chain_code,enterprise_id,encrypted_secret,status) VALUES (${randomUUID()},${u.tenantId},${p},${b.mode},${b.environment},${b.gateway},${b.hotelId},${b.chainCode},${b.enterpriseId},${secret},'not_connected') ON CONFLICT(property_id) DO UPDATE SET mode=excluded.mode,environment=excluded.environment,gateway=excluded.gateway,hotel_id=excluded.hotel_id,chain_code=excluded.chain_code,enterprise_id=excluded.enterprise_id,encrypted_secret=excluded.encrypted_secret,status='not_connected',last_sync=NULL,checkpoint='{}',next_poll=now()`,
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${u.tenantId},7291043001))`,
+      );
+      if (
+        (
+          await tx.execute(
+            sql`SELECT 1 FROM reservations WHERE tenant_id=${u.tenantId} AND property_id=${p} AND source!='DEMO' LIMIT 1`,
+          )
+        ).rows.length
+      )
+        throw fail(409, "Use an empty property when changing sources");
+      if (
+        (
+          await tx.execute(
+            sql`SELECT 1 FROM ohip_connection_properties WHERE tenant_id=${u.tenantId} AND property_id=${p}`,
+          )
+        ).rows.length
+      )
+        throw fail(
+          409,
+          "An Oracle connection is assigned; use a separate property for demo data",
+        );
+      await tx.execute(
+        sql`INSERT INTO connections(id,tenant_id,property_id,mode,environment,status) VALUES (${randomUUID()},${u.tenantId},${p},'demo','DEMO','demo') ON CONFLICT(property_id) DO UPDATE SET mode='demo',environment='DEMO',status='demo',next_poll=now()`,
       );
       await audit(tx, u, p, "connection.configure", p);
       await appendEvent(tx, u.tenantId, p, "integrations");

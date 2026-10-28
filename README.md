@@ -58,6 +58,18 @@ Default `NODE_ENV=production` tidak mengisi akun atau data demo. Provisioning id
 
 RBAC, multi-tenant/property authorization, white-label branding, seluruh menu operasional, worker OHIP, dan realtime tetap dipertahankan. [Panduan variabel, keamanan, backup, dan deployment](docs/DEPLOYMENT.md) menjelaskan seluruh pengaturan. Native dan Docker memiliki penyimpanan berbeda; mengganti mode tidak memindahkan data otomatis.
 
+## OHIP Connection Center (OCIM)
+
+Buka **Integrations > OHIP Connections**, pilih properti di workspace, lalu **Create New Connection**. Form hanya berisi enam parameter: `baseUrl`, `clientId`, `clientSecret`, `appKey`, `enterpriseId`, dan `hotelId`. Tidak ada Chain Mapping, Chain ID, environment, atau scope tambahan sebagai input wajib.
+
+Untuk credentials yang sama, pilih **Use Existing Connection**, pilih connection, lalu masukkan **Hotel ID properti tersebut**. Untuk credentials berbeda, pilih **Create Dedicated Connection** atau **Create New Connection**. Backend memvalidasi OAuth dan akses reservation API untuk Hotel ID sebelum aktivasi. Properti yang berisi reservasi demo harus dipisahkan dari properti Oracle agar sumber data tidak tercampur.
+
+**Edit Connection** mempertahankan client secret dan application key jika kolomnya dikosongkan. Perubahan credentials bersama diuji terhadap seluruh Hotel ID terkait dan membutuhkan grant ke semua properti tersebut. Credentials identik disimpan sekali dalam tenant; credentials tidak dibagikan lintas tenant. Connection List menampilkan Assigned Properties, Test Connection, Last Connected dan Connection Health. Secret yang tersimpan tidak dikirim ke browser.
+
+Backend memakai OCIM Client Credentials ke `baseUrl/oauth/v1/tokens`, scope tetap `urn:opc:hgbu:ws:__myscopes__`, cache token per tenant/connection/revisi credentials, pembaruan sebelum kedaluwarsa, dan satu refresh setelah HTTP 401. Oracle tidak menggunakan refresh-token grant pada alur ini. Header operasional memakai Bearer token, `x-app-key`, dan `x-hotelid` dari assignment properti. [Spesifikasi header dan scope Oracle](https://docs.oracle.com/en/industries/hospitality/integration-platform/ohipu/c_calling_oracle_hospitality_property_apis_ocim.htm).
+
+Migrasi `0002_ocim_connections.sql` dan backfill transaksional memisahkan credentials ke `ohip_connections` dan Hotel ID ke `ohip_connection_properties`. Backup database dan simpan ENCRYPTION_KEY asli sebelum upgrade. Migrasi mempertahankan credentials serta assignment lama, menyatukan credentials identik hanya dalam tenant, dan mempertahankan kolom chain historis. Key yang salah membatalkan seluruh migrasi. Assignment lama tanpa bukti koneksi sukses berstatus pending sampai **Test Connection** berhasil. [Detail migrasi dan API](docs/OHIP_OCIM.md).
+
 ## Verifikasi
 
 ```sh

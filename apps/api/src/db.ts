@@ -7,6 +7,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { migrationPath } from "./paths.js";
+import { migrateLegacyConnections } from "./connection-store.js";
 export { sql };
 export type Database = Awaited<ReturnType<typeof openDb>>;
 export async function openDb(test = false, connection?: string | AppConfig) {
@@ -57,26 +58,43 @@ export function databaseError(error: unknown): Error {
   );
 }
 export async function migrate(db: Database) {
-  const migration = await readFile(
-    join(migrationPath, "0001_initial.sql"),
-    "utf8",
-  );
   await db.orm.transaction(async (tx) => {
-    // Also serialize the very first CREATE TABLE across concurrent processes.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(7291043000::bigint)`);
     await tx.execute(
       sql`CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY)`,
     );
-    if (
-      (
-        await tx.execute(
-          sql`SELECT version FROM schema_migrations WHERE version='0001'`,
-        )
-      ).rows.length
-    )
-      return;
-    for (const statement of migration.split(";").filter((s) => s.trim()))
-      await tx.execute(sql.raw(statement));
-    await tx.execute(sql`INSERT INTO schema_migrations VALUES ('0001')`);
+    for (const [version, filename] of [
+      ["0001", "0001_initial.sql"],
+      ["0002", "0002_ocim_connections.sql"],
+    ]) {
+      if (
+        (
+          await tx.execute(
+            sql`SELECT version FROM schema_migrations WHERE version=${version}`,
+          )
+        ).rows.length
+      )
+        continue;
+      const migration = await readFile(join(migrationPath, filename), "utf8");
+      for (const statement of migration.split(";").filter((s) => s.trim()))
+        await tx.execute(sql.raw(statement));
+      if (version === "0002") {
+        try {
+          await migrateLegacyConnections(tx);
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message.startsWith(
+              "Cannot migrate existing OHIP credentials.",
+            )
+          )
+            throw error;
+          throw Error(
+            "OHIP credential migration failed; the transaction was rolled back. Check database permissions and the original ENCRYPTION_KEY before retrying.",
+          );
+        }
+      }
+      await tx.execute(sql`INSERT INTO schema_migrations VALUES (${version})`);
+    }
   });
 }

@@ -1,6 +1,16 @@
 import { z } from "zod";
 import type { Reservation } from "@hospitality/contracts";
 import { decrypt } from "./security.js";
+import { createHash } from "node:crypto";
+import { isIP } from "node:net";
+import { credentials } from "./connection-store.js";
+export const OCIM_SCOPE = "urn:opc:hgbu:ws:__myscopes__";
+type TokenState = {
+  token: string;
+  expires: number;
+  refreshing: Promise<void> | null;
+};
+const tokenCaches = new WeakMap<object, Map<string, TokenState>>();
 let nextRequestAt = 0;
 export function retryAfter(response: Response) {
   const value = response.headers.get("retry-after");
@@ -114,9 +124,14 @@ export function validateGateway(gateway: string) {
   }
   const allowed = (process.env.OHIP_ALLOWED_HOSTS || "")
     .split(",")
+    .map((host) => host.trim())
     .filter(Boolean);
   if (
     url.protocol !== "https:" ||
+    isIP(url.hostname.replace(/^\[|\]$/g, "")) !== 0 ||
+    url.hostname === "localhost" ||
+    url.hostname.endsWith(".localhost") ||
+    url.hostname.endsWith(".local") ||
     url.username ||
     url.password ||
     url.port ||
@@ -129,9 +144,7 @@ export function validateGateway(gateway: string) {
   return url.origin;
 }
 export class RealOhipAdapter implements OperationsAdapter {
-  private token = "";
-  private expires = 0;
-  private refreshing: Promise<void> | null = null;
+  private state: TokenState;
   private base: string;
   private secret: {
     clientId: string;
@@ -143,10 +156,51 @@ export class RealOhipAdapter implements OperationsAdapter {
     private transport: typeof fetch = fetch,
     private telemetry?: (event: Telemetry) => Promise<void>,
   ) {
-    this.base = validateGateway(connection.gateway);
-    this.secret = decrypt(connection.encrypted_secret);
+    this.base = validateGateway(connection.base_url || connection.gateway);
+    if (connection.encrypted_client_secret) {
+      const value = credentials(connection);
+      this.secret = {
+        clientId: value.clientId,
+        clientSecret: value.clientSecret,
+        applicationKey: value.appKey,
+      };
+    } else this.secret = decrypt(connection.encrypted_secret); // Compatibility for in-memory legacy adapters.
+    this.state = { token: "", expires: 0, refreshing: null };
+    if (
+      connection.encrypted_client_secret &&
+      connection.connection_id &&
+      connection.tenant_id
+    ) {
+      let cache = tokenCaches.get(transport);
+      if (!cache) {
+        cache = new Map();
+        tokenCaches.set(transport, cache);
+      }
+      const revision = createHash("sha256")
+        .update(
+          JSON.stringify([
+            this.base,
+            connection.enterprise_id,
+            connection.client_id,
+            connection.encrypted_client_secret,
+            connection.encrypted_app_key,
+          ]),
+        )
+        .digest("hex");
+      const key = JSON.stringify([
+        connection.tenant_id,
+        connection.connection_id,
+        revision,
+      ]);
+      if (cache.has(key)) this.state = cache.get(key)!;
+      else {
+        if (cache.size >= 500) cache.delete(cache.keys().next().value!);
+        cache.set(key, this.state);
+      }
+    }
   }
   private async request(path: string, options: RequestInit, operation: string) {
+    validateGateway(this.base);
     if (this.transport === fetch) {
       const wait = Math.max(0, nextRequestAt - Date.now());
       nextRequestAt =
@@ -178,9 +232,9 @@ export class RealOhipAdapter implements OperationsAdapter {
     }
   }
   private async authenticate() {
-    if (this.expires > Date.now()) return;
-    if (!this.refreshing)
-      this.refreshing = (async () => {
+    if (this.state.expires > Date.now()) return;
+    if (!this.state.refreshing)
+      this.state.refreshing = (async () => {
         const r = await this.request(
           "/oauth/v1/tokens",
           {
@@ -195,7 +249,7 @@ export class RealOhipAdapter implements OperationsAdapter {
             },
             body: new URLSearchParams({
               grant_type: "client_credentials",
-              scope: "urn:opc:hgbu:ws:__myscopes__",
+              scope: OCIM_SCOPE,
             }),
           },
           "oauth_token",
@@ -205,15 +259,64 @@ export class RealOhipAdapter implements OperationsAdapter {
         const token = z
           .object({
             access_token: z.string().min(1),
-            expires_in: z.coerce.number().positive(),
+            expires_in: z.coerce.number().positive().max(86400),
           })
           .parse(await r.json());
-        this.token = token.access_token;
-        this.expires = Date.now() + Math.max(0, token.expires_in - 60) * 1000;
+        this.state.token = token.access_token;
+        this.state.expires =
+          Date.now() +
+          token.expires_in * 1000 -
+          Math.min(60000, token.expires_in * 100);
       })().finally(() => {
-        this.refreshing = null;
+        this.state.refreshing = null;
       });
-    await this.refreshing;
+    await this.state.refreshing;
+  }
+  private async search(body: Record<string, unknown>) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await this.authenticate();
+      const token = this.state.token;
+      const response = await this.request(
+        `/rsv/v1/hotels/${encodeURIComponent(this.connection.hotel_id)}/reservations/searches`,
+        {
+          method: "POST",
+          redirect: "error",
+          signal: AbortSignal.timeout(20000),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "x-app-key": this.secret.applicationKey,
+            "x-hotelid": this.connection.hotel_id,
+          },
+          body: JSON.stringify(body),
+        },
+        "searchHotelReservations",
+      );
+      if (response.status !== 401 || attempt === 1) return response;
+      if (this.state.token === token) this.state.expires = 0;
+    }
+    throw new OhipError(401, "authentication");
+  }
+  async testConnection() {
+    const response = await this.search({
+      searchType: "Any",
+      limit: 1,
+      offset: 0,
+    });
+    if (!response.ok)
+      throw new OhipError(
+        response.status,
+        classify(response.status),
+        retryAfter(response),
+      );
+    if (response.status !== 204) {
+      try {
+        oracleResponse.parse(await response.json());
+      } catch {
+        throw new OhipError(422, "contract");
+      }
+    }
+    return { status: "connected" as const };
   }
   async read(date: string, knownIds: string[] = []) {
     const items: Omit<Reservation, "updated_at">[] = [];
@@ -239,34 +342,7 @@ export class RealOhipAdapter implements OperationsAdapter {
       let offset = 0;
       for (let page = 0; page < 20; page++) {
         if (Date.now() > deadline) throw new OhipError(0, "poll_deadline");
-        let response: Response | undefined;
-        for (let attempt = 0; attempt < 2; attempt++) {
-          await this.authenticate();
-          const body = {
-            ...search,
-            limit: 100,
-            offset,
-          };
-          response = await this.request(
-            `/rsv/v1/hotels/${encodeURIComponent(this.connection.hotel_id)}/reservations/searches`,
-            {
-              method: "POST",
-              redirect: "error",
-              signal: AbortSignal.timeout(20000),
-              headers: {
-                Authorization: `Bearer ${this.token}`,
-                "Content-Type": "application/json",
-                "x-app-key": this.secret.applicationKey,
-                "x-hotelid": this.connection.hotel_id,
-              },
-              body: JSON.stringify(body),
-            },
-            "searchHotelReservations",
-          );
-          if (response.status !== 401 || attempt === 1) break;
-          this.expires = 0;
-        }
-        const r = response!;
+        const r = await this.search({ ...search, limit: 100, offset });
         if (r.status === 204) break;
         if (!r.ok) {
           const h = r.headers.get("retry-after");

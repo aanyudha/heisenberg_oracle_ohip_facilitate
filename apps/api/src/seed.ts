@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { openDb, migrate, sql, type Database } from "./db.js";
 import { hashPassword } from "./security.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, applyConfig } from "./config.js";
 export async function seed(db: Database, password: string) {
   if (password.length < 12)
     throw Error("DEMO_PASSWORD requires at least 12 characters");
@@ -94,6 +94,7 @@ if (
   process.argv[1]?.endsWith("seed.js")
 ) {
   const config = loadConfig();
+  applyConfig(config);
   if (config.production) throw Error("Demo seed disabled in production");
   const db = await openDb(false, config);
   try {

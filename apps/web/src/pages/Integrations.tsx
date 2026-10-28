@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import ConnectionCenter from "./ConnectionCenter";
 import { useParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, Plug, ShieldCheck, RotateCcw } from "lucide-react";
+import { ShieldCheck, RotateCcw } from "lucide-react";
 import { useWorkspace } from "../workspace";
 import { useData, write, time } from "../api";
 import { Badge, Empty, Heading, Pager, State } from "../components";
@@ -11,7 +12,6 @@ export default function Integrations() {
   const client = useQueryClient();
   const [error, setError] = useState(""),
     [message, setMessage] = useState(""),
-    [mode, setMode] = useState("demo"),
     [page, setPage] = useState(1),
     [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -82,171 +82,7 @@ export default function Integrations() {
       </div>
       <State query={data}>
         {section === "connections" ? (
-          <div className="integration-columns">
-            <section className="panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>Connection configuration</h2>
-                  <p>
-                    Credentials are encrypted and never returned to the browser.
-                  </p>
-                </div>
-                <Plug size={21} />
-              </div>
-              <form
-                className="form-grid"
-                key={propertyId}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget);
-                  void save(
-                    "/connections",
-                    {
-                      propertyId,
-                      mode,
-                      environment: f.get("environment"),
-                      gateway: f.get("gateway") || "",
-                      hotelId: f.get("hotelId") || "",
-                      chainCode: f.get("chainCode") || "",
-                      enterpriseId: f.get("enterpriseId") || "",
-                      ...(mode === "real"
-                        ? {
-                            clientId: f.get("clientId"),
-                            clientSecret: f.get("clientSecret"),
-                            applicationKey: f.get("applicationKey"),
-                          }
-                        : {}),
-                    },
-                    "PUT",
-                  );
-                }}
-              >
-                <label>
-                  Data source
-                  <select
-                    value={mode}
-                    onChange={(e) => setMode(e.target.value)}
-                  >
-                    <option value="demo">DEMO · Mock adapter</option>
-                    <option value="real">Oracle OHIP · OCIM</option>
-                  </select>
-                </label>
-                <label>
-                  Environment
-                  <select name="environment" key={mode}>
-                    {(mode === "demo"
-                      ? ["DEMO"]
-                      : ["sandbox", "production"]
-                    ).map((e) => (
-                      <option key={e}>{e}</option>
-                    ))}
-                  </select>
-                </label>
-                {mode === "real" && (
-                  <>
-                    <label className="full">
-                      HTTPS Gateway
-                      <input
-                        name="gateway"
-                        defaultValue={connection?.gateway}
-                        placeholder="https://gateway.example.oraclecloud.com"
-                        type="url"
-                        required
-                      />
-                    </label>
-                    <label>
-                      Hotel ID
-                      <input
-                        name="hotelId"
-                        defaultValue={connection?.hotel_id}
-                        required
-                      />
-                    </label>
-                    <label>
-                      Chain mapping
-                      <input
-                        name="chainCode"
-                        defaultValue={connection?.chain_code}
-                      />
-                    </label>
-                    <label className="full">
-                      Enterprise ID
-                      <input
-                        name="enterpriseId"
-                        defaultValue={connection?.enterprise_id}
-                        required
-                      />
-                    </label>
-                    <label>
-                      Client ID
-                      <input name="clientId" required autoComplete="off" />
-                    </label>
-                    <label>
-                      Client secret
-                      <input
-                        name="clientSecret"
-                        type="password"
-                        required
-                        autoComplete="new-password"
-                      />
-                    </label>
-                    <label className="full">
-                      Application key
-                      <input
-                        name="applicationKey"
-                        type="password"
-                        required
-                        autoComplete="new-password"
-                      />
-                    </label>
-                    <p className="helper full">
-                      Gateway must be on the server's configured allowlist.
-                      Saving replaces the credentials. Test against an
-                      authorized sandbox before using a production environment.
-                    </p>
-                  </>
-                )}
-                <button className="primary full" disabled={busy}>
-                  Save connection
-                </button>
-              </form>
-            </section>
-            <section className="panel connection-card">
-              <span className="large-icon">
-                <Activity size={30} />
-              </span>
-              <h2>Current source status</h2>
-              <Badge
-                tone={
-                  connection?.mode === "demo"
-                    ? "amber"
-                    : connection?.status === "connected"
-                      ? "green"
-                      : "rose"
-                }
-              >
-                {connection?.status || "Not configured"}
-              </Badge>
-              <dl>
-                <div>
-                  <dt>Mode</dt>
-                  <dd>{connection?.mode || "—"}</dd>
-                </div>
-                <div>
-                  <dt>Environment</dt>
-                  <dd>{connection?.environment || "—"}</dd>
-                </div>
-                <div>
-                  <dt>Last source sync</dt>
-                  <dd>{time(connection?.last_sync)}</dd>
-                </div>
-              </dl>
-              <p className="helper">
-                DEMO sync confirms the local sample adapter. It does not contact
-                Oracle or refresh sample reservations.
-              </p>
-            </section>
-          </div>
+          <ConnectionCenter key={propertyId} propertyId={propertyId} />
         ) : section === "health" ? (
           <section className="panel">
             <div className="panel-heading">

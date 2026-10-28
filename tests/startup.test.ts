@@ -66,8 +66,10 @@ describe("startup lifecycle", () => {
         await db.query(sql`SELECT name FROM tenants WHERE id='persist-test'`),
       ).toEqual([{ name: "Persist test" }]);
       expect(
-        await db.query(sql`SELECT version FROM schema_migrations`),
-      ).toEqual([{ version: "0001" }]);
+        await db.query(
+          sql`SELECT version FROM schema_migrations ORDER BY version`,
+        ),
+      ).toEqual([{ version: "0001" }, { version: "0002" }]);
     } finally {
       await db.close();
     }

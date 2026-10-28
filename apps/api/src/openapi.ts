@@ -56,20 +56,46 @@ const bodies: Record<string, unknown> = {
     ["propertyId", "status", "attention"],
   ),
   "PUT /api/connections": object(
-    {
-      propertyId,
-      mode: { enum: ["demo", "real"] },
-      environment: { enum: ["DEMO", "sandbox", "production"] },
-      gateway: { type: "string", maxLength: 300 },
-      hotelId: text,
-      chainCode: text,
-      enterpriseId: text,
-      clientId: { type: "string", maxLength: 200 },
-      clientSecret: { type: "string", maxLength: 1000, writeOnly: true },
-      applicationKey: { type: "string", maxLength: 1000, writeOnly: true },
-    },
+    { propertyId, mode: { enum: ["demo"] }, environment: { enum: ["DEMO"] } },
     ["propertyId", "mode", "environment"],
   ),
+  "POST /api/ohip-connections": object(
+    {
+      propertyId,
+      baseUrl: { type: "string", maxLength: 300 },
+      clientId: { type: "string", maxLength: 200 },
+      clientSecret: { type: "string", maxLength: 1000, writeOnly: true },
+      appKey: { type: "string", maxLength: 1000, writeOnly: true },
+      enterpriseId: text,
+      hotelId: text,
+    },
+    [
+      "propertyId",
+      "baseUrl",
+      "clientId",
+      "clientSecret",
+      "appKey",
+      "enterpriseId",
+      "hotelId",
+    ],
+  ),
+  "PATCH /api/ohip-connections/:id": object(
+    {
+      propertyId,
+      baseUrl: { type: "string", maxLength: 300 },
+      clientId: { type: "string", maxLength: 200 },
+      clientSecret: { type: "string", maxLength: 1000, writeOnly: true },
+      appKey: { type: "string", maxLength: 1000, writeOnly: true },
+      enterpriseId: text,
+      hotelId: text,
+    },
+    ["propertyId", "baseUrl", "clientId", "enterpriseId", "hotelId"],
+  ),
+  "POST /api/ohip-connections/:id/assign": object(
+    { propertyId, hotelId: text },
+    ["propertyId", "hotelId"],
+  ),
+  "POST /api/ohip-connections/:id/test": object({ propertyId }, ["propertyId"]),
   "POST /api/retry-jobs/:id/retry": object({ propertyId }, ["propertyId"]),
   "PUT /api/branding": object(
     {
@@ -149,6 +175,7 @@ export function documentRoutes(app: FastifyInstance) {
       if (
         [
           "/api/connections",
+          "/api/ohip-connections",
           "/api/integration-logs",
           "/api/retry-jobs",
           "/api/audit-logs",

@@ -212,6 +212,30 @@ try {
   ]) {
     await page.getByRole("link", { name, exact: true }).click();
     await page.locator("h1").waitFor();
+    if (name === "OHIP Connections") {
+      await page
+        .getByRole("button", { name: "Create New Connection", exact: true })
+        .click();
+      const form = page.getByRole("form", {
+        name: "Create Connection",
+        exact: true,
+      });
+      const fields = await form
+        .locator("input")
+        .evaluateAll((inputs) => inputs.map((input) => input.name).sort());
+      if (
+        JSON.stringify(fields) !==
+        JSON.stringify([
+          "appKey",
+          "baseUrl",
+          "clientId",
+          "clientSecret",
+          "enterpriseId",
+          "hotelId",
+        ])
+      )
+        throw Error("OHIP connection form must contain exactly six parameters");
+    }
     await page.waitForTimeout(100);
     if (await page.getByRole("alert").count())
       throw Error("Error view on " + name);
@@ -351,11 +375,14 @@ try {
       "nested SPA route refresh",
       "missing API/assets never return SPA HTML",
       "runtime secrets never returned through HTTP",
+      "OHIP OCIM connection form has exactly six parameters",
     ],
     database:
-      docker || env.DB_TYPE === "postgres"
+      docker
         ? "PostgreSQL in Compose persistent volume"
-        : "Isolated persistent embedded PostgreSQL (PGlite)",
+        : env.DB_TYPE === "postgres"
+          ? "External PostgreSQL reached from native Fastify"
+          : "Isolated persistent embedded PostgreSQL (PGlite)",
     screenshots: [
       "artifacts/dashboard-desktop.png",
       "artifacts/dashboard-tablet.png",

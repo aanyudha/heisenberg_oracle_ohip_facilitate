@@ -5,7 +5,7 @@
 - Morning briefing with source timestamps; arrivals, departures, VIP and in-house counts drill into filtered reservations. Search by confirmation/guest name, arrival and status; paginated reservation detail.
 - Rooms requiring attention and local housekeeping inspection; priority task creation, assignment, acknowledgment and completion. Changes are stored, audited and delivered to other browsers.
 - Server-side command center grouped by the current tenant and authorized properties, organization/date filters, property comparison and alerts. Property links select the corresponding operational workspace.
-- OCIM connection configuration per property/environment, encrypted credentials, request telemetry, correlation IDs, HTTP/latency/error classifications, safe read retries, bounded backoff and dead letters.
+- OCIM shared/dedicated connections with property-specific Hotel IDs, encrypted credentials, request telemetry, correlation IDs, HTTP/latency/error classifications, safe read retries, bounded backoff and dead letters.
 - Organizations, properties, users/roles/property grants, branding and audit trail. Editing access revokes existing sessions. Platform administrators can provision an empty tenant and switch only to tenants where they hold membership.
 - Persistent React Router shell, lazy routes, skeleton/empty/error states, role-based menus, desktop/tablet/mobile layout, tenant app name/logo/favicon/color/title resolution.
 - Native Fastify WebSockets: authenticated cookie + Origin + CSRF, fresh grant checks, scoped metadata without PII, heartbeat/ping, bounded buffers, sequence replay, reconnection, reconciliation, focus refetch and 30-second HTTP fallback.
@@ -15,7 +15,7 @@
 1. Create an **empty property** and grant the operator access. Demo and Oracle reservations cannot be mixed in a property; configuring the opposite source is rejected rather than deleting records.
 2. Set `ENCRYPTION_KEY` to a cryptographically random 32-byte key encoded as 64 hex characters, stored outside source control. Retain it securely for decryption/rotation.
 3. Set `OHIP_ALLOWED_HOSTS` to exact approved gateway hostnames. The adapter requires HTTPS, rejects URL credentials/extra paths/ports, and refuses redirects. TLS verification stays enabled.
-4. In OHIP Connections, select Oracle, choose the actual environment, and supply its OCIM client ID/secret, application key, enterprise ID and hotel/chain mapping. Credentials are write-only and replaced on save.
+4. In OHIP Connections, select a property and Create New Connection with only baseUrl, clientId, clientSecret, appKey, enterpriseId and hotelId. For shared credentials use Use Existing Connection and the new property Hotel ID. Credentials remain write-only; blank secret fields on Edit Connection preserve saved values. OAuth and a bounded read-only reservation search validate Hotel ID access before activation. There is no Chain Mapping requirement.
 5. Authorize the documented read operation in Oracle and inspect Integration Health and Request Logs. No real Oracle credentials or hotel access were supplied for this implementation.
 
 The adapter uses the official `POST /rsv/v1/hotels/{hotelId}/reservations/searches` operation, with OCIM `/oauth/v1/tokens`, token reuse and one 401 refresh. Read-only semantics make this POST search safe to retry; arbitrary POST/mutation retries are not supported. API permissions remain controlled by Oracle. SSD/resource-owner authentication is not implemented.
