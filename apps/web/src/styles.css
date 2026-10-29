@@ -1581,3 +1581,8 @@ input[type="checkbox"] {
     font-size: 21px;
   }
 }
+
+.clickable-row { cursor: pointer; }
+.clickable-row:hover, .clickable-row:focus-visible { background: #edf5f3; outline: 2px solid var(--primary, #17675d); outline-offset: -2px; }
+dialog { max-width: 36rem; border: 1px solid #ccd6d2; border-radius: 12px; padding: 24px; }
+dialog::backdrop { background: #102a4380; }

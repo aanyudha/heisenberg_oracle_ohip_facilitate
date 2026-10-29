@@ -17,6 +17,14 @@ Semua mutasi Oracle, GraphQL dan arbitrary proxy ditolak dengan **403 `OHIP_READ
 
 [Daftar endpoint, batas semantics, pengecualian OAuth, dan bukti pengujian](docs/OHIP_READ_ONLY_POLICY.md). Tidak ada perubahan credentials tersimpan atau schema database untuk penguncian read-only ini.
 
+## Local CRUD dan connection lifecycle
+
+Tabel Oracle memakai klik baris, Enter/Space dan dialog read-only; detail tidak memiliki action mutasi. Tenant/organization/property memiliki create, edit, archive; user memiliki create, edit access, archive membership. Branding dapat disimpan atau di-reset. Semua perubahan lokal diaudit, dibatasi RBAC/tenant, dan tidak mengirim write ke Oracle. Archive mempertahankan histori dan menolak dependency aktif.
+
+Connection Manager menyediakan View, Edit, Test, Stop/Resume per property atau seluruh shared connection, dan Archive. Stop global memerlukan konfirmasi jumlah/nama properti. Pause persisten, memblokir scheduler/enqueue/retry serta outbound policy; credentials/mapping dipertahankan. Resume memvalidasi konfigurasi dan menjadwalkan bounded reconciliation. Status Browser WebSocket, OHIP Connection dan Property Data terpisah; cache paused ditandai Stale.
+
+Migration **0003** menambah pause/archive/revision dan registry soft archive lokal tanpa mengubah nilai credentials. [Semantics, endpoint, proteksi dependency dan validasi](docs/LOCAL_ACTIONS_CONNECTION_CONTROL.md).
+
 ## Setup
 
 Gunakan Node.js 24/npm untuk native, atau Docker Engine dengan Compose untuk Docker.

@@ -144,6 +144,37 @@ export function Shell({ user }: { user: Workspace["user"] }) {
   );
   const [mobile, setMobile] = useState(false);
   const { state, lastSync } = useRealtime(user);
+  const sourceHealth = useData<{
+    items: {
+      connection: string;
+      source: string;
+      freshness: string;
+      lastSync: string | null;
+    }[];
+  }>(
+    ["overview", "source-health", user.tenantId, propertyId],
+    `/overview?propertyId=${encodeURIComponent(propertyId)}`,
+    !!propertyId,
+  );
+  const source = sourceHealth.data?.items[0];
+  const ohipStatus =
+    source?.connection === "PAUSED"
+      ? "Paused"
+      : source?.source === "real" && source.connection !== "degraded"
+        ? "Active"
+        : "Error";
+  const dataStatus =
+    source?.connection === "PAUSED"
+      ? "Stale"
+      : source?.source === "demo"
+        ? "DEMO"
+        : source?.connection === "not_connected"
+          ? "Syncing"
+          : source?.freshness === "synced"
+            ? "Live"
+            : source?.freshness === "stale"
+              ? "Stale"
+              : "Unavailable";
   const location = useLocation();
   useEffect(() => {
     applyBranding(user.branding);
@@ -330,7 +361,10 @@ export function Shell({ user }: { user: Workspace["user"] }) {
                 className={"connection " + state.toLowerCase()}
               >
                 <i />
-                {state}
+                Browser WebSocket:{" "}
+                {state === "Connected"
+                  ? "Connected"
+                  : `Disconnected (${state})`}
               </span>
               <span className="avatar small">
                 {user.name.slice(0, 2).toUpperCase()}
@@ -346,6 +380,11 @@ export function Shell({ user }: { user: Workspace["user"] }) {
                 {location.pathname === "/"
                   ? "MORNING BRIEFING"
                   : location.pathname.split("/")[1]?.toUpperCase()}
+              </span>
+              <span>
+                OHIP Connection: {ohipStatus}
+                <br />
+                Property Data: {dataStatus}
               </span>
               <span>
                 Last workspace event{" "}
@@ -404,9 +443,13 @@ export default function App() {
   if (me.error) {
     if (me.error instanceof ApiError && me.error.status === 401)
       return <Login />;
-    return (
-      <ErrorPanel message={me.error.message} retry={() => void me.refetch()} />
-    );
+    if (!me.data)
+      return (
+        <ErrorPanel
+          message={me.error.message}
+          retry={() => void me.refetch()}
+        />
+      );
   }
   if (!me.data) return null;
   setCsrf(me.data.csrf);

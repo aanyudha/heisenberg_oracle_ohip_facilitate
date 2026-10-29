@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import { Search, X, ArrowUpRight } from "lucide-react";
+import { Search } from "lucide-react";
 import type { Reservation, Task } from "@hospitality/contracts";
 import { canGuests } from "@hospitality/contracts";
 import { useWorkspace } from "../workspace";
 import { useData, time } from "../api";
-import { Badge, Empty, Heading, Pager, State } from "../components";
+import {
+  Badge,
+  Empty,
+  Heading,
+  Pager,
+  State,
+  ReadOnlyDialog,
+} from "../components";
 export function ReservationTable({
   items,
   onSelect,
@@ -26,19 +33,25 @@ export function ReservationTable({
             <th>Room</th>
             <th>Status</th>
             <th>Source / Updated</th>
-            <th />
           </tr>
         </thead>
         <tbody>
           {items.map((r) => (
-            <tr key={r.id}>
+            <tr
+              key={r.id}
+              className="clickable-row"
+              tabIndex={0}
+              aria-label={`View ${r.confirmation}`}
+              onClick={() => onSelect(r.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(r.id);
+                }
+              }}
+            >
               <td>
-                <button
-                  className="text-button guest-name"
-                  onClick={() => onSelect(r.id)}
-                >
-                  {r.guest_name}
-                </button>
+                <b className="guest-name">{r.guest_name}</b>
                 {r.vip && <Badge tone="amber">VIP</Badge>}
               </td>
               <td className="mono">{r.confirmation}</td>
@@ -56,14 +69,6 @@ export function ReservationTable({
                 {r.source}
                 <small>{time(r.updated_at)}</small>
               </td>
-              <td>
-                <button
-                  aria-label={`View ${r.confirmation}`}
-                  onClick={() => onSelect(r.id)}
-                >
-                  <ArrowUpRight size={16} />
-                </button>
-              </td>
             </tr>
           ))}
         </tbody>
@@ -75,6 +80,7 @@ export default function Operations() {
   const { section } = useParams();
   const { user, propertyId, date } = useWorkspace();
   const [params] = useSearchParams();
+  const [roomDetail, setRoomDetail] = useState<any>(null);
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState(""),
     [arrival, setArrival] = useState(""),
@@ -94,6 +100,7 @@ export default function Operations() {
   useEffect(() => {
     setPage(1);
     setSelected("");
+    setRoomDetail(null);
   }, [section, propertyId, search, status, arrival, view]);
   const reservations = useData<{ items: Reservation[]; total: number }>(
     [
@@ -272,7 +279,20 @@ export default function Operations() {
             ) : (
               <div className="room-grid">
                 {rooms.data?.items.map((r) => (
-                  <div className="room-card" key={r.id}>
+                  <div
+                    className="room-card clickable-row"
+                    key={r.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`View room ${r.id}`}
+                    onClick={() => setRoomDetail(r)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setRoomDetail(r);
+                      }
+                    }}
+                  >
                     <div>
                       <h2>{r.id}</h2>
                       <Badge tone={r.attention ? "amber" : "green"}>
@@ -294,46 +314,44 @@ export default function Operations() {
         </section>
       )}
       {selected && (
-        <div className="modal-backdrop">
-          <section
-            className="detail-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Reservation detail"
-          >
-            <button
-              className="close"
-              aria-label="Close detail"
-              onClick={() => setSelected("")}
-            >
-              <X />
-            </button>
-            <p className="eyebrow">RESERVATION DETAIL</p>
-            <State query={detail}>
-              <h2>{detail.data?.guest_name}</h2>
-              <Badge tone="green">{detail.data?.status}</Badge>
-              {detail.data?.vip && <Badge tone="amber">VIP</Badge>}
-              <dl>
-                {[
-                  ["Confirmation", detail.data?.confirmation],
-                  ["Arrival", detail.data?.arrival?.slice(0, 10)],
-                  ["Departure", detail.data?.departure?.slice(0, 10)],
-                  ["Room", detail.data?.room || "Unassigned"],
-                  ["Source", detail.data?.source],
-                  ["Updated", time(detail.data?.updated_at)],
-                ].map(([label, value]) => (
-                  <div key={label}>
-                    <dt>{label}</dt>
-                    <dd>{value}</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="helper">
-                Read-only reservation snapshot. No Oracle actions are available.
-              </p>
-            </State>
-          </section>
-        </div>
+        <ReadOnlyDialog
+          title="Reservation detail"
+          onClose={() => setSelected("")}
+        >
+          <p className="eyebrow">RESERVATION DETAIL</p>
+          <State query={detail}>
+            <h2>{detail.data?.guest_name}</h2>
+            <Badge tone="green">{detail.data?.status}</Badge>
+            {detail.data?.vip && <Badge tone="amber">VIP</Badge>}
+            <dl>
+              {[
+                ["Confirmation", detail.data?.confirmation],
+                ["Arrival", detail.data?.arrival?.slice(0, 10)],
+                ["Departure", detail.data?.departure?.slice(0, 10)],
+                ["Room", detail.data?.room || "Unassigned"],
+                ["Source", detail.data?.source],
+                ["Updated", time(detail.data?.updated_at)],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt>{label}</dt>
+                  <dd>{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <p className="helper">
+              Read-only reservation snapshot. No Oracle actions are available.
+            </p>
+          </State>
+        </ReadOnlyDialog>
+      )}
+      {roomDetail && (
+        <ReadOnlyDialog title="Room detail" onClose={() => setRoomDetail(null)}>
+          <h2>Room {roomDetail.id}</h2>
+          <p>{roomDetail.status}</p>
+          <p>{roomDetail.attention}</p>
+          <p>{time(roomDetail.updated_at)}</p>
+          <p>Read-only cached snapshot.</p>
+        </ReadOnlyDialog>
       )}
     </>
   );

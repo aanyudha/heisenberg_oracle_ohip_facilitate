@@ -4,7 +4,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { roles } from "@hospitality/contracts";
 import { useWorkspace } from "../workspace";
 import { useData, write, time } from "../api";
-import { Badge, Empty, Heading, Pager, State } from "../components";
+import {
+  Badge,
+  Empty,
+  Heading,
+  Pager,
+  State,
+  ConfirmDialog,
+} from "../components";
 export default function Admin() {
   const { section } = useParams();
   const { user } = useWorkspace();
@@ -14,9 +21,12 @@ export default function Admin() {
     [page, setPage] = useState(1),
     [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<any>(null);
+  const [archiving, setArchiving] = useState<any>(null);
   useEffect(() => {
     setMessage("");
     setError("");
+    setEditing(null);
+    setArchiving(null);
   }, [section]);
   const data = useData<any>(
     ["admin", user.tenantId],
@@ -34,6 +44,8 @@ export default function Admin() {
     try {
       await write(path, body, method);
       setMessage("Saved successfully.");
+      setEditing(null);
+      setArchiving(null);
       await client.invalidateQueries();
     } catch (e) {
       setError((e as Error).message);
@@ -73,6 +85,25 @@ export default function Admin() {
         <p className="success" role="status">
           {message}
         </p>
+      )}
+      {archiving && (
+        <ConfirmDialog
+          title="Archive internal record"
+          busy={busy}
+          onCancel={() => setArchiving(null)}
+          onConfirm={() =>
+            void submit(
+              section === "branding"
+                ? "/branding"
+                : `/admin/${section}/${archiving.id}`,
+              {},
+              "DELETE",
+            )
+          }
+        >
+          Archive {archiving.name}? History and audit records are retained.
+          Dependent records may prevent this action.
+        </ConfirmDialog>
       )}
       {section === "branding" ? (
         <section className="panel">
@@ -121,6 +152,18 @@ export default function Admin() {
             </label>
             <button disabled={busy} className="primary full">
               Save branding
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setArchiving({
+                  id: user.tenantId,
+                  name: "workspace branding (restore defaults)",
+                })
+              }
+            >
+              Reset branding
             </button>
           </form>
         </section>
@@ -189,6 +232,60 @@ export default function Admin() {
                 Provision tenant
               </button>
             </form>
+          )}
+          {editing && section !== "users" && (
+            <section className="panel">
+              <h2>Edit {editing.name}</h2>
+              <form
+                className="form-grid"
+                onSubmit={onSubmit(
+                  `/admin/${section}/${editing.id}`,
+                  (f) => Object.fromEntries(f),
+                  "PATCH",
+                )}
+              >
+                <label>
+                  Name
+                  <input
+                    name="name"
+                    defaultValue={editing.name}
+                    required
+                    maxLength={100}
+                  />
+                </label>
+                {section === "properties" && (
+                  <>
+                    <label>
+                      Organization
+                      <select
+                        name="organizationId"
+                        defaultValue={editing.organization_id}
+                      >
+                        {data.data?.organizations.map((o: any) => (
+                          <option key={o.id} value={o.id}>
+                            {o.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Timezone
+                      <input
+                        name="timezone"
+                        defaultValue={editing.timezone}
+                        required
+                      />
+                    </label>
+                  </>
+                )}
+                <button disabled={busy} className="primary">
+                  Save changes
+                </button>
+                <button type="button" onClick={() => setEditing(null)}>
+                  Cancel
+                </button>
+              </form>
+            </section>
           )}
           {section === "users" && editing && (
             <section className="panel">
@@ -367,6 +464,7 @@ export default function Admin() {
                     ).map((c) => (
                       <th key={c}>{c}</th>
                     ))}
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -380,11 +478,6 @@ export default function Admin() {
                           <td>{r.email}</td>
                           <td>
                             <Badge>{r.role}</Badge>{" "}
-                            {r.id !== user.id && (
-                              <button onClick={() => setEditing(r)}>
-                                Edit access
-                              </button>
-                            )}
                           </td>
                           <td>
                             {r.properties.join(", ") || "No property access"}
@@ -398,6 +491,28 @@ export default function Admin() {
                       ) : (
                         <td className="mono">{r.id}</td>
                       )}
+                      <td>
+                        {(section !== "tenants" ||
+                          user.role === "platform_admin") && (
+                          <>
+                            <button
+                              disabled={
+                                busy ||
+                                (section === "users" && r.id === user.id)
+                              }
+                              onClick={() => setEditing(r)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              disabled={busy}
+                              onClick={() => setArchiving(r)}
+                            >
+                              Archive
+                            </button>
+                          </>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

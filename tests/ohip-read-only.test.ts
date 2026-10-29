@@ -58,6 +58,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("strict OHIP read-only policy", () => {
+  it("requires the persistent connection dispatch guard for the default outbound transport", async () => {
+    const transport = vi.fn(async () => Response.json({}));
+    vi.stubGlobal("fetch", transport);
+    try {
+      const audit = vi.fn(async () => {});
+      const client = new OhipHttpClient(route, scope(), fetch, audit);
+      await expect(
+        client.request(base, path, search(), "searchHotelReservations"),
+      ).rejects.toMatchObject({ statusCode: 403 });
+      expect(transport).not.toHaveBeenCalled();
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({ classification: POLICY_CODE, status: 403 }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("locks configuration defaults and rejects every attempted enable/write value", () => {
     const env = {
       APP_MODE: "native",

@@ -96,6 +96,18 @@ const bodies: Record<string, unknown> = {
     ["propertyId", "hotelId"],
   ),
   "POST /api/ohip-connections/:id/test": object({ propertyId }, ["propertyId"]),
+  "POST /api/ohip-connections/:id/control": object(
+    {
+      propertyId,
+      action: { enum: ["pause", "resume", "archive"] },
+      confirmGlobal: { type: "boolean" },
+    },
+    ["action"],
+  ),
+  "PATCH /api/admin/:kind/:id": object(
+    { name: text, organizationId: text, timezone: text },
+    ["name"],
+  ),
   "POST /api/retry-jobs/:id/retry": object({ propertyId }, ["propertyId"]),
   "PUT /api/branding": object(
     {
@@ -158,8 +170,12 @@ export function documentRoutes(app: FastifyInstance) {
     };
     if (bodies[`${method} ${route.url}`])
       route.schema.body = bodies[`${method} ${route.url}`];
-    if (route.url.includes(":id"))
-      route.schema.params = object({ id: text }, ["id"]);
+    const params = [...route.url.matchAll(/:([A-Za-z]+)/g)].map((m) => m[1]);
+    if (params.length)
+      route.schema.params = object(
+        Object.fromEntries(params.map((p) => [p, text])),
+        params,
+      );
     if (method === "GET") {
       if (
         [

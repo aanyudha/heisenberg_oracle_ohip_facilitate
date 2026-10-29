@@ -1,3 +1,4 @@
+import { connectionDispatch } from "./connection-control.js";
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -89,6 +90,7 @@ export function registerConnectionCenter(
       )
     )[0];
     if (!row) throw fail(404, "Connection not found");
+    if (row.archived_at) throw fail(409, "Connection is archived");
     const assignments = await db.query(
       sql`SELECT * FROM ohip_connection_properties WHERE tenant_id=${u.tenantId} AND connection_id=${connectionId} ORDER BY property_id`,
     );
@@ -154,6 +156,12 @@ export function registerConnectionCenter(
         propertyId: p,
         connectionId: row.id || row.connection_id || "credential-validation",
         hotelId,
+        dispatch: connectionDispatch(
+          db,
+          u.tenantId,
+          p,
+          row.id || row.connection_id || "credential-validation",
+        ),
         authorize: async () => {
           const actor = (
             await db.query(
@@ -214,24 +222,26 @@ export function registerConnectionCenter(
       })
       .parse(req.query);
     if (q.propertyId) property(u, q.propertyId);
-    const where = sql`c.tenant_id=${u.tenantId} AND (EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=c.tenant_id AND m.connection_id=c.id AND m.property_id IN (${scope(u)})) OR (${canAdmin(u.role)} AND NOT EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=c.tenant_id AND m.connection_id=c.id)))`;
+    const where = sql`c.tenant_id=${u.tenantId} AND c.archived_at IS NULL AND (EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=c.tenant_id AND m.connection_id=c.id AND m.property_id IN (${scope(u)})) OR (${canAdmin(u.role)} AND NOT EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=c.tenant_id AND m.connection_id=c.id)))`;
     const items = await db.query(
-      sql`SELECT c.id,c.base_url,c.client_id,c.enterprise_id,c.status,c.created_at,c.updated_at,NOT EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=c.tenant_id AND m.connection_id=c.id AND m.property_id NOT IN (${scope(u)})) AS can_edit FROM ohip_connections c WHERE ${where} ORDER BY c.created_at,c.id LIMIT ${q.limit} OFFSET ${(q.page - 1) * q.limit}`,
+      sql`SELECT c.id,c.base_url,c.client_id,c.enterprise_id,c.paused,c.status,c.created_at,c.updated_at,NOT EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=c.tenant_id AND m.connection_id=c.id AND m.property_id NOT IN (${scope(u)})) AS can_edit FROM ohip_connections c WHERE ${where} ORDER BY c.created_at,c.id LIMIT ${q.limit} OFFSET ${(q.page - 1) * q.limit}`,
     );
     for (const c of items) {
       c.assigned_properties = await db.query(
-        sql`SELECT m.id,m.property_id,p.name,m.hotel_id,m.is_primary,m.validation_status,m.last_validated_at,s.status,s.last_sync FROM ohip_connection_properties m JOIN properties p ON p.tenant_id=m.tenant_id AND p.id=m.property_id LEFT JOIN connections s ON s.tenant_id=m.tenant_id AND s.property_id=m.property_id WHERE m.tenant_id=${u.tenantId} AND m.connection_id=${c.id} AND m.property_id IN (${scope(u)}) ORDER BY p.name`,
+        sql`SELECT m.id,m.property_id,p.name,m.hotel_id,m.is_primary,m.paused,m.validation_status,m.last_validated_at,CASE WHEN m.paused OR ${c.paused} THEN 'PAUSED' ELSE s.status END AS status,s.last_sync,CASE WHEN m.paused OR ${c.paused} THEN 'Stale' WHEN s.status='not_connected' THEN 'Syncing' WHEN s.last_sync IS NULL THEN 'Unavailable' WHEN s.status!='connected' OR s.last_sync<now()-interval '3 minutes' THEN 'Stale' ELSE 'Live' END AS data_status FROM ohip_connection_properties m JOIN properties p ON p.tenant_id=m.tenant_id AND p.id=m.property_id LEFT JOIN connections s ON s.tenant_id=m.tenant_id AND s.property_id=m.property_id WHERE m.tenant_id=${u.tenantId} AND m.connection_id=${c.id} AND m.property_id IN (${scope(u)}) ORDER BY p.name`,
       );
-      c.health = c.assigned_properties.some(
-        (m: any) =>
-          m.status === "degraded" || m.validation_status === "invalid",
-      )
-        ? "degraded"
+      c.health = c.paused
+        ? "PAUSED"
         : c.assigned_properties.some(
-              (m: any) => m.validation_status === "pending",
+              (m: any) =>
+                m.status === "degraded" || m.validation_status === "invalid",
             )
-          ? "pending"
-          : c.status;
+          ? "degraded"
+          : c.assigned_properties.some(
+                (m: any) => m.validation_status === "pending",
+              )
+            ? "pending"
+            : c.status;
       c.last_connected = c.assigned_properties.reduce(
         (last: string | null, m: any) => {
           const date =
@@ -378,6 +388,77 @@ export function registerConnectionCenter(
         : new OhipError(502, "connection_test_failed");
     return { ok: true, status: "connected" };
   });
+  app.post("/api/ohip-connections/:id/control", async (req) => {
+    const u = req.principal;
+    if (!canAdmin(u.role)) throw fail(403, "Administrator required");
+    const cid = text(100).parse((req.params as any).id);
+    const b = z
+      .strictObject({
+        action: z.enum(["pause", "resume", "archive"]),
+        propertyId: text(100).optional(),
+        confirmGlobal: z.boolean().optional(),
+      })
+      .parse(req.body);
+    if (b.propertyId) property(u, b.propertyId);
+    if (!b.propertyId && !b.confirmGlobal)
+      throw fail(400, "Confirm all affected properties");
+    await db.orm.transaction(async (tx) => {
+      await lock(tx, u.tenantId);
+      const row = (
+        await tx.execute(
+          sql`SELECT * FROM ohip_connections WHERE tenant_id=${u.tenantId} AND id=${cid} AND archived_at IS NULL`,
+        )
+      ).rows[0];
+      if (!row) throw fail(404, "Connection not found");
+      const mappings = (
+        await tx.execute(
+          sql`SELECT * FROM ohip_connection_properties WHERE tenant_id=${u.tenantId} AND connection_id=${cid} ORDER BY property_id`,
+        )
+      ).rows;
+      const targets = b.propertyId
+        ? mappings.filter((m) => m.property_id === b.propertyId)
+        : mappings;
+      if (b.propertyId && !targets.length)
+        throw fail(404, "Assignment not found");
+      targets.forEach((m) => property(u, String(m.property_id)));
+      if (b.action === "archive" && b.propertyId)
+        throw fail(400, "Archive applies to the entire connection");
+      if (b.action === "resume") {
+        validateGateway(String(row.base_url));
+        credentials(row as Record<string, any>);
+        if (b.propertyId && row.paused)
+          throw fail(409, "Resume the shared connection first");
+        if (targets.some((m) => m.validation_status !== "validated"))
+          throw fail(409, "Assignment must have validated configuration");
+      }
+      if (!b.propertyId)
+        await tx.execute(
+          sql`UPDATE ohip_connections SET status=${b.action === "archive" ? "archived" : b.action === "pause" ? "PAUSED" : "not_connected"},paused=${b.action !== "resume"},archived_at=${b.action === "archive" ? new Date() : null},updated_at=now() WHERE tenant_id=${u.tenantId} AND id=${cid}`,
+        );
+      for (const m of targets) {
+        if (b.propertyId)
+          await tx.execute(
+            sql`UPDATE ohip_connection_properties SET paused=${b.action !== "resume"},control_revision=control_revision+1 WHERE tenant_id=${u.tenantId} AND connection_id=${cid} AND property_id=${m.property_id}`,
+          );
+        await tx.execute(
+          sql`UPDATE connections SET status=${(b.action === "resume" && !m.paused) || (b.action === "resume" && !!b.propertyId) ? "not_connected" : "PAUSED"},next_poll=now(),lease_until=NULL WHERE tenant_id=${u.tenantId} AND property_id=${m.property_id}`,
+        );
+        await audit(
+          tx,
+          u,
+          String(m.property_id),
+          "connection." + b.action,
+          cid,
+        );
+      }
+      if (!targets.length) {
+        await tx.execute(
+          sql`INSERT INTO audit_logs(id,tenant_id,actor,action,target) VALUES (${randomUUID()},${u.tenantId},${u.id},${"connection." + b.action},${cid})`,
+        );
+      }
+    });
+    return { ok: true };
+  });
   app.patch("/api/ohip-connections/:id", async (req) => {
     const u = req.principal;
     permitted(u);
@@ -453,7 +534,7 @@ export function registerConnectionCenter(
         await tx.execute(
           sql`UPDATE connections SET status='connected',next_poll=now() WHERE tenant_id=${u.tenantId} AND property_id=${m.property_id}`,
         );
-        await audit(tx, u, m.property_id, "connection.update", cid);
+        await audit(tx, u, String(m.property_id), "connection.update", cid);
       }
     });
     return { ok: true };

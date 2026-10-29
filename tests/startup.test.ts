@@ -55,6 +55,9 @@ describe("startup lifecycle", () => {
       await db.query(
         sql`INSERT INTO tenants VALUES ('persist-test','Persist test')`,
       );
+      await db.query(
+        sql`INSERT INTO ohip_connections(id,tenant_id,base_url,client_id,encrypted_client_secret,encrypted_app_key,enterprise_id,paused,status) VALUES ('paused-restart','persist-test','https://example.oraclecloud.com','client','opaque-existing-secret','opaque-existing-key','enterprise',true,'PAUSED')`,
+      );
     } finally {
       await db.close();
     }
@@ -66,10 +69,25 @@ describe("startup lifecycle", () => {
         await db.query(sql`SELECT name FROM tenants WHERE id='persist-test'`),
       ).toEqual([{ name: "Persist test" }]);
       expect(
+        (
+          await db.query(
+            sql`SELECT paused,status,encrypted_client_secret FROM ohip_connections WHERE id='paused-restart'`,
+          )
+        )[0],
+      ).toEqual({
+        paused: true,
+        status: "PAUSED",
+        encrypted_client_secret: "opaque-existing-secret",
+      });
+      expect(
         await db.query(
           sql`SELECT version FROM schema_migrations ORDER BY version`,
         ),
-      ).toEqual([{ version: "0001" }, { version: "0002" }]);
+      ).toEqual([
+        { version: "0001" },
+        { version: "0002" },
+        { version: "0003" },
+      ]);
     } finally {
       await db.close();
     }

@@ -121,9 +121,22 @@ try {
   const page = await context.newPage();
   let socketCount = 0,
     socketCloses = 0;
+  const socketEvents = [];
   page.on("websocket", (socket) => {
     socketCount++;
     socket.on("close", () => socketCloses++);
+    socket.on("framereceived", ({ payload }) => {
+      try {
+        const e = JSON.parse(String(payload));
+        socketEvents.push({
+          topic: e.topic,
+          seq: e.seq,
+          propertyId: e.propertyId,
+        });
+      } catch {
+        /* Ignore non-JSON protocol frames. */
+      }
+    });
   });
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("request", (r) => {
@@ -137,7 +150,9 @@ try {
   await page
     .getByRole("heading", { name: "Every detail. A smoother day." })
     .waitFor();
-  await page.getByText("Connected", { exact: true }).waitFor();
+  await page
+    .getByText("Browser WebSocket: Connected", { exact: true })
+    .waitFor();
   await page.getByLabel("Property", { exact: true }).selectOption("demo-1");
   await page.screenshot({
     path: "artifacts/dashboard-desktop.png",
@@ -149,9 +164,7 @@ try {
     .waitFor();
   await page.getByLabel("Search reservations").fill("DEMO-81000");
   await page.getByRole("cell", { name: "DEMO-81000", exact: true }).waitFor();
-  await page
-    .getByRole("button", { name: "View DEMO-81000", exact: true })
-    .click();
+  await page.getByRole("row", { name: "View DEMO-81000", exact: true }).click();
   await page.getByRole("dialog").waitFor();
   await page.getByRole("button", { name: "Close detail" }).click();
   await page.getByRole("link", { name: "Priority Tasks", exact: true }).click();
@@ -325,13 +338,18 @@ try {
   await page.waitForFunction(
     () =>
       [...document.querySelectorAll(".connection")].some(
-        (n) => n.textContent === "Connected",
+        (n) => n.textContent === "Browser WebSocket: Connected",
       ),
     {},
     { timeout: 30000 },
   );
   if (socketCount < 2 || socketCloses < 1)
     throw Error("WebSocket did not reconnect after restart");
+  if (
+    (await page.getByLabel("Property", { exact: true }).inputValue()) !==
+    "demo-1"
+  )
+    throw Error("Selected property changed during restart");
   const persisted = await context.request.get(
     `http://localhost:${port}/api/tasks?propertyId=demo-1`,
   );
@@ -345,6 +363,7 @@ try {
     stored.status !== "acknowledged"
   )
     throw Error("Task data did not persist after restart");
+  const eventStart = socketEvents.length;
   const second = await context.request.post(
     `http://localhost:${port}/api/tasks`,
     {
@@ -360,6 +379,28 @@ try {
     },
   );
   if (!second.ok()) throw Error("Post-reconnect mutation failed");
+  const deadline = Date.now() + 15000;
+  while (
+    !socketEvents
+      .slice(eventStart)
+      .some((e) => e.topic === "tasks" && e.propertyId === "demo-1") &&
+    Date.now() < deadline
+  )
+    await page.waitForTimeout(100);
+  if (
+    !socketEvents
+      .slice(eventStart)
+      .some((e) => e.topic === "tasks" && e.propertyId === "demo-1")
+  )
+    throw Error(
+      "Missing task WebSocket event after restart: " +
+        JSON.stringify({
+          socketCount,
+          socketCloses,
+          events: socketEvents.slice(-8),
+          status: await page.locator(".connection").textContent(),
+        }),
+    );
   await page
     .getByRole("heading", { name: reconnectTitle })
     .waitFor({ timeout: 5000 });

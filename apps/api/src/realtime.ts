@@ -52,7 +52,7 @@ export function realtime(db: Database) {
       }
       const grants = (
         await db.query(
-          sql`SELECT property_id FROM property_grants WHERE tenant_id=${c.user.tenantId} AND user_id=${c.user.id}`,
+          sql`SELECT property_id FROM property_grants g WHERE tenant_id=${c.user.tenantId} AND user_id=${c.user.id} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=g.tenant_id AND a.kind='properties' AND a.target=g.property_id)`,
         )
       ).map((r) => r.property_id);
       const high = Number(

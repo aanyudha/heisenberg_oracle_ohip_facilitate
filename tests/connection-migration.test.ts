@@ -90,7 +90,7 @@ describe("safe OCIM credential migration", () => {
         await db.query(
           sql`SELECT version FROM schema_migrations ORDER BY version`,
         ),
-      ).toEqual([{ version: "0001" }, { version: "0002" }]);
+      ).toEqual([{ version: "0001" }, { version: "0002" }, { version: "0003" }]);
     } finally {
       await isolated.close();
     }

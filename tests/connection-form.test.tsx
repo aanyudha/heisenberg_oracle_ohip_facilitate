@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Context } from "../apps/web/src/workspace";
 import ConnectionCenter from "../apps/web/src/pages/ConnectionCenter";
 let items: any[] = [];
 const writes: { url: string; body: any }[] = [];
@@ -19,7 +20,17 @@ function renderCenter() {
         new QueryClient({ defaultOptions: { queries: { retry: false } } })
       }
     >
-      <ConnectionCenter propertyId="property-a" />
+      <Context.Provider
+        value={
+          {
+            user: { role: "group_admin" },
+            propertyId: "property-a",
+            date: "2026-10-29",
+          } as any
+        }
+      >
+        <ConnectionCenter propertyId="property-a" />
+      </Context.Provider>
     </QueryClientProvider>,
   );
 }
@@ -32,6 +43,9 @@ const expected = [
   "hotelId",
 ];
 beforeEach(() => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
   items = [];
   writes.length = 0;
   vi.stubGlobal(
@@ -81,6 +95,43 @@ function shared() {
   };
 }
 describe("six-field OCIM connection form", () => {
+  it("requires confirmation with affected property names/count before global stop and scopes property stop", async () => {
+    items = [shared()];
+    renderCenter();
+    await screen.findByText("Hotel A");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stop Entire Connection" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "pause connection" }),
+    ).toHaveTextContent("Affects 2 properties: Hotel A, Hotel B.");
+    expect(writes).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop Property" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "Affects only Hotel A.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(writes[0]).toEqual({
+        url: "/api/ohip-connections/connection-a/control",
+        body: { action: "pause", propertyId: "property-a" },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Stop Entire Connection" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(writes[1]).toEqual({
+        url: "/api/ohip-connections/connection-a/control",
+        body: { action: "pause", confirmGlobal: true },
+      }),
+    );
+  });
   it("creates with exactly six inputs and no mode/environment/chain/scope field; clears secrets after saving", async () => {
     renderCenter();
     await screen.findByText(

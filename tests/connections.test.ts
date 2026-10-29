@@ -6,6 +6,7 @@ import { buildApp } from "../apps/api/src/app";
 import { seed } from "../apps/api/src/seed";
 import { decrypt } from "../apps/api/src/security";
 import { worker } from "../apps/api/src/worker";
+import { connectionDispatch } from "../apps/api/src/connection-control";
 let db: Database, app: Awaited<ReturnType<typeof buildApp>>;
 let admin: any, itUser: any, other: any, front: any;
 let closeDatabase: () => Promise<void>;
@@ -105,6 +106,209 @@ afterAll(async () => {
   await closeDatabase?.();
 });
 describe("OCIM connection center", () => {
+  it("persists property/global pause, blocks outbound and polling, resumes without affecting another property and audits every control", async () => {
+    const a = await property(),
+      b = await property();
+    const r = await create(body(a));
+    expect(r.statusCode, r.body).toBe(200);
+    const cid = r.json().id;
+    expect((await assign(cid, b, "HOTEL_B")).statusCode).toBe(200);
+    const control = (action: string, propertyId?: string, headers = admin) =>
+      app.inject({
+        method: "POST",
+        url: `/api/ohip-connections/${cid}/control`,
+        headers,
+        payload: {
+          action,
+          ...(propertyId ? { propertyId } : { confirmGlobal: true }),
+        },
+      });
+    expect((await control("pause", a, itUser)).statusCode).toBe(403);
+    expect((await control("pause", a, other)).statusCode).toBe(403);
+    expect((await control("pause", a)).statusCode).toBe(200);
+    const send = vi.fn(async () => Response.json({}));
+    await expect(connectionDispatch(db, "demo", a, cid)(send)).rejects.toThrow(
+      "OHIP_READ_ONLY_POLICY",
+    );
+    expect(send).not.toHaveBeenCalled();
+    await connectionDispatch(db, "demo", b, cid)(send);
+    expect(send).toHaveBeenCalledTimes(1);
+    const restartedApp = await buildApp(db, { ohipTransport: transport });
+    try {
+      const list = await restartedApp.inject({
+        url: `/api/ohip-connections?propertyId=${a}`,
+        headers: admin,
+      });
+      const c = list.json().items.find((c: any) => c.id === cid);
+      expect(
+        c.assigned_properties.find((m: any) => m.property_id === a),
+      ).toMatchObject({ paused: true, status: "PAUSED", data_status: "Stale" });
+      expect(
+        c.assigned_properties.find((m: any) => m.property_id === b).paused,
+      ).toBe(false);
+    } finally {
+      await restartedApp.close();
+    }
+    await db.query(
+      sql`UPDATE connections SET next_poll=now() WHERE property_id IN (${a},${b})`,
+    );
+    const read = vi.fn(async () => ({ items: [], status: 200 }));
+    await worker(
+      db,
+      (c) =>
+        ({
+          read: async () => {
+            if (c.property_id === a) throw Error("paused property polled");
+            return read();
+          },
+          testConnection: async () => true,
+        }) as any,
+    ).tick();
+    expect(
+      await db.query(sql`SELECT * FROM retry_jobs WHERE property_id=${a}`),
+    ).toHaveLength(0);
+    const retryId = randomUUID();
+    await db.query(
+      sql`INSERT INTO retry_jobs(id,tenant_id,property_id,operation,idempotency_key,state) VALUES (${retryId},'demo',${a},'reservation_poll',${retryId},'dead')`,
+    );
+    expect(
+      (
+        await app.inject({
+          method: "POST",
+          url: `/api/retry-jobs/${retryId}/retry`,
+          headers: admin,
+          payload: { propertyId: a },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect((await control("resume", a)).statusCode).toBe(200);
+    expect(
+      (
+        await db.query(
+          sql`SELECT status,next_poll<=now() AS due FROM connections WHERE property_id=${a}`,
+        )
+      )[0],
+    ).toMatchObject({ status: "not_connected", due: true });
+    read.mockClear();
+    await db.query(
+      sql`UPDATE connections SET next_poll=now()+interval '1 day'`,
+    );
+    await db.query(
+      sql`UPDATE connections SET next_poll=now() WHERE property_id=${a}`,
+    );
+    await worker(db, () => ({ read }) as any).tick();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        await db.query(
+          sql`SELECT status FROM connections WHERE property_id=${a}`,
+        )
+      )[0].status,
+    ).toBe("connected");
+    expect((await control("pause")).statusCode).toBe(200);
+    for (const p of [a, b])
+      await expect(
+        connectionDispatch(db, "demo", p, cid)(send),
+      ).rejects.toThrow();
+    expect((await control("resume", a)).statusCode).toBe(409);
+    expect((await control("resume")).statusCode).toBe(200);
+    await connectionDispatch(db, "demo", a, cid)(send);
+    expect((await control("archive")).statusCode).toBe(200);
+    await expect(
+      connectionDispatch(db, "demo", b, cid)(send),
+    ).rejects.toThrow();
+    expect(
+      (
+        await db.query(
+          sql`SELECT action FROM audit_logs WHERE target=${cid} AND action IN ('connection.pause','connection.resume','connection.archive')`,
+        )
+      ).length,
+    ).toBe(8);
+  });
+  it("serializes global pause after in-flight dispatch and rejects the next request", async () => {
+    const p = await property(),
+      r = await create(body(p)),
+      cid = r.json().id;
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>((r) => {
+        release = r;
+      }),
+      ready = new Promise<void>((r) => {
+        started = r;
+      });
+    const dispatch = connectionDispatch(db, "demo", p, cid);
+    const inflight = dispatch(async () => {
+      started();
+      await gate;
+      return Response.json({});
+    });
+    await ready;
+    let stopped = false;
+    const pause = app
+      .inject({
+        method: "POST",
+        url: `/api/ohip-connections/${cid}/control`,
+        headers: admin,
+        payload: { action: "pause", confirmGlobal: true },
+      })
+      .then((r) => {
+        stopped = true;
+        return r;
+      });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stopped).toBe(false);
+    release();
+    await inflight;
+    expect((await pause).statusCode).toBe(200);
+    const send = vi.fn(async () => Response.json({}));
+    await expect(dispatch(send)).rejects.toThrow();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it("rejects a worker snapshot that raced with a property pause/resume cycle", async () => {
+    const p = await property(),
+      created = await create(body(p)),
+      cid = created.json().id;
+    await db.query(sql`DELETE FROM retry_jobs`);
+    await db.query(
+      sql`UPDATE connections SET next_poll=now()+interval '1 day'`,
+    );
+    await db.query(
+      sql`UPDATE connections SET next_poll=now() WHERE property_id=${p}`,
+    );
+    const w = worker(
+      db,
+      () =>
+        ({
+          read: async () => {
+            for (const action of ["pause", "resume"]) {
+              const r = await app.inject({
+                method: "POST",
+                url: `/api/ohip-connections/${cid}/control`,
+                headers: admin,
+                payload: { action, propertyId: p },
+              });
+              expect(r.statusCode, r.body).toBe(200);
+            }
+            return { items: [], status: 200 };
+          },
+        }) as any,
+    );
+    await w.tick();
+    expect(
+      (
+        await db.query(
+          sql`SELECT last_sync FROM connections WHERE property_id=${p}`,
+        )
+      )[0].last_sync,
+    ).toBeNull();
+    expect(
+      (
+        await db.query(
+          sql`SELECT last_error FROM retry_jobs WHERE property_id=${p}`,
+        )
+      )[0].last_error,
+    ).toBe("connection_changed");
+  });
   it("accepts exactly six connection parameters plus authorized property context; redacts stored secrets", async () => {
     const p = await property(),
       value = body(p),

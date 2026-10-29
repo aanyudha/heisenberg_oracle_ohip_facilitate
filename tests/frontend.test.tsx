@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Context, type Workspace } from "../apps/web/src/workspace";
 import Operations, { ReservationTable } from "../apps/web/src/pages/Operations";
-import { Shell } from "../apps/web/src/main";
+import App, { Shell } from "../apps/web/src/main";
 import { useRealtime } from "../apps/web/src/realtime";
 import { State } from "../apps/web/src/components";
 const user: Workspace["user"] = {
@@ -85,6 +85,81 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("SPA and data states", () => {
+  it("preserves selected property through transient identity refetch errors but signs out on 401", async () => {
+    const identity = {
+      ...user,
+      properties: [
+        ...user.properties,
+        {
+          id: "demo-2",
+          name: "Second hotel",
+          organization_id: "group",
+          timezone: "UTC",
+        },
+      ],
+    };
+    let status = 200;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: any) => {
+        if (String(url).startsWith("/api/me"))
+          return status === 200
+            ? Response.json(identity)
+            : Response.json({ error: "Temporary failure" }, { status });
+        if (String(url).startsWith("/api/branding"))
+          return Response.json(user.branding);
+        return Response.json({ items: [], total: 0 });
+      }),
+    );
+    const { client } = wrap(<App />);
+    const property = await screen.findByRole("combobox", { name: "Property" });
+    fireEvent.change(property, { target: { value: "demo-2" } });
+    expect(property).toHaveValue("demo-2");
+    status = 503;
+    await client.invalidateQueries({ queryKey: ["me"] });
+    await waitFor(() =>
+      expect(client.getQueryState(["me"])?.status).toBe("error"),
+    );
+    expect(screen.getByRole("combobox", { name: "Property" })).toBe(property);
+    expect(property).toHaveValue("demo-2");
+    status = 401;
+    await client.invalidateQueries({ queryKey: ["me"] });
+    expect(
+      await screen.findByRole("heading", { name: "Sign in to your workspace" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "Property" }),
+    ).not.toBeInTheDocument();
+  });
+  it("opens read-only reservation details by row click, Enter and Space without an action column", () => {
+    const select = vi.fn();
+    wrap(
+      <ReservationTable
+        items={[
+          {
+            id: "row-1",
+            guest_name: "Guest",
+            confirmation: "CONF-1",
+            arrival: "2026-10-29",
+            departure: "2026-10-30",
+            status: "Reserved",
+            source: "OHIP",
+            updated_at: "2026-10-29",
+          } as any,
+        ]}
+        onSelect={select}
+      />,
+    );
+    const row = screen.getByRole("row", { name: "View CONF-1" });
+    expect(row).toHaveAttribute("tabindex", "0");
+    fireEvent.click(row);
+    fireEvent.keyDown(row, { key: "Enter" });
+    fireEvent.keyDown(row, { key: " " });
+    expect(select.mock.calls).toEqual([["row-1"], ["row-1"], ["row-1"]]);
+    expect(screen.getAllByRole("columnheader")).toHaveLength(6);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalled();
+  });
   it("navigates using the persistent shell without a document request", async () => {
     wrap(<Shell user={user} />);
     const header = screen.getByRole("banner");

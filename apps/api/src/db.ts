@@ -66,6 +66,7 @@ export async function migrate(db: Database) {
     for (const [version, filename] of [
       ["0001", "0001_initial.sql"],
       ["0002", "0002_ocim_connections.sql"],
+      ["0003", "0003_local_controls.sql"],
     ]) {
       if (
         (

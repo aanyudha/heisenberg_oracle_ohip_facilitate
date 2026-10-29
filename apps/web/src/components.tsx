@@ -1,4 +1,82 @@
-import { Component, type ReactNode } from "react";
+import { Component, useEffect, useRef, type ReactNode } from "react";
+export function ReadOnlyDialog({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.showModal();
+    return () => previous?.focus();
+  }, []);
+  return (
+    <dialog
+      ref={dialog}
+      className="detail-modal"
+      aria-label={title}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      <button
+        className="close"
+        aria-label="Close detail"
+        onClick={onClose}
+        autoFocus
+      >
+        Close
+      </button>
+      {children}
+    </dialog>
+  );
+}
+export function ConfirmDialog({
+  title,
+  children,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  children: ReactNode;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.showModal();
+    return () => previous?.focus();
+  }, []);
+  return (
+    <dialog
+      ref={dialog}
+      aria-label={title}
+      onCancel={(e) => {
+        e.preventDefault();
+        if (!busy) onCancel();
+      }}
+    >
+      <h2>{title}</h2>
+      <p>{children}</p>
+      <div className="actions">
+        <button disabled={busy} onClick={onCancel} autoFocus>
+          Cancel
+        </button>
+        <button disabled={busy} onClick={onConfirm}>
+          Confirm
+        </button>
+      </div>
+    </dialog>
+  );
+}
 import type { UseQueryResult } from "@tanstack/react-query";
 export function Skeleton() {
   return (

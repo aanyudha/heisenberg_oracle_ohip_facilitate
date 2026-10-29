@@ -38,7 +38,7 @@ export async function findOrCreateConnection(
 ) {
   const candidates = (
     await tx.execute(
-      sql`SELECT * FROM ohip_connections WHERE tenant_id=${tenantId} AND base_url=${value.baseUrl} AND client_id=${value.clientId} AND enterprise_id=${value.enterpriseId}`,
+      sql`SELECT * FROM ohip_connections WHERE status!='archived' AND tenant_id=${tenantId} AND base_url=${value.baseUrl} AND client_id=${value.clientId} AND enterprise_id=${value.enterpriseId}`,
     )
   ).rows;
   const existing = candidates.find((row) =>

@@ -1,3 +1,4 @@
+import { registerLocalManagement } from "./local-management.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
@@ -108,12 +109,12 @@ export async function buildApp(
     if (!token) throw fail(401, "Sign in required");
     const s = (
       await db.query(
-        sql`SELECT s.*,m.role,u.developer FROM sessions s JOIN memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id JOIN users u ON u.id=s.user_id WHERE token_hash=${hashToken(token)} AND expires_at>now()`,
+        sql`SELECT s.*,m.role,u.developer FROM sessions s JOIN memberships m ON m.tenant_id=s.tenant_id AND m.user_id=s.user_id JOIN users u ON u.id=s.user_id WHERE token_hash=${hashToken(token)} AND expires_at>now() AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=s.tenant_id AND (a.kind='tenants' OR (a.kind='users' AND a.target=s.user_id)))`,
       )
     )[0];
     if (!s) throw fail(401, "Session expired");
     const grants = await db.query(
-      sql`SELECT property_id FROM property_grants WHERE tenant_id=${s.tenant_id} AND user_id=${s.user_id}`,
+      sql`SELECT property_id FROM property_grants g WHERE tenant_id=${s.tenant_id} AND user_id=${s.user_id} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=g.tenant_id AND a.kind='properties' AND a.target=g.property_id)`,
     );
     return {
       id: s.user_id,
@@ -240,7 +241,7 @@ export async function buildApp(
         })
         .parse(req.body);
       const users = await db.query(
-        sql`SELECT u.*,m.tenant_id FROM users u JOIN memberships m ON m.user_id=u.id WHERE lower(u.email)=${b.email.toLowerCase()} ${b.tenantId ? sql`AND m.tenant_id=${b.tenantId}` : sql``} ORDER BY m.tenant_id`,
+        sql`SELECT u.*,m.tenant_id FROM users u JOIN memberships m ON m.user_id=u.id WHERE NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND (a.kind='tenants' OR (a.kind='users' AND a.target=u.id))) AND lower(u.email)=${b.email.toLowerCase()} ${b.tenantId ? sql`AND m.tenant_id=${b.tenantId}` : sql``} ORDER BY m.tenant_id`,
       );
       const u = users[0];
       if (!u || !(await verifyPassword(b.password, u.password_hash)))
@@ -273,7 +274,7 @@ export async function buildApp(
     if (
       !(
         await db.query(
-          sql`SELECT 1 FROM memberships WHERE user_id=${u.id} AND tenant_id=${b.tenantId}`,
+          sql`SELECT 1 FROM memberships WHERE user_id=${u.id} AND tenant_id=${b.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=memberships.tenant_id AND (a.kind='tenants' OR (a.kind='users' AND a.target=memberships.user_id)))`,
         )
       ).length
     )
@@ -304,7 +305,7 @@ export async function buildApp(
       csrf: u.csrf,
       name: user.name,
       tenants: await db.query(
-        sql`SELECT t.id,t.name FROM tenants t JOIN memberships m ON m.tenant_id=t.id WHERE m.user_id=${u.id} ORDER BY t.name`,
+        sql`SELECT t.id,t.name FROM tenants t JOIN memberships m ON m.tenant_id=t.id WHERE m.user_id=${u.id} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=t.id AND (a.kind='tenants' OR (a.kind='users' AND a.target=m.user_id))) ORDER BY t.name`,
       ),
       properties: await db.query(
         sql`SELECT id,name,organization_id,timezone FROM properties WHERE tenant_id=${u.tenantId} AND id IN (${scope(u)}) ORDER BY name`,
@@ -345,8 +346,8 @@ export async function buildApp(
         .parse(req.query);
     if (q.propertyId) property(u, q.propertyId);
     const rows =
-      await db.query(sql`SELECT p.id,p.name,p.organization_id,p.timezone,c.status AS connection,c.last_sync AS "lastSync",c.mode AS source,
-      CASE WHEN c.mode='demo' THEN 'demo' WHEN c.last_sync IS NULL THEN 'not_synced' WHEN c.status!='connected' OR c.last_sync<now()-${Math.max(180000, (Number(process.env.POLL_INTERVAL_MS) || 60000) * 3)}*interval '1 millisecond' THEN 'stale' ELSE 'synced' END AS freshness,
+      await db.query(sql`SELECT p.id,p.name,p.organization_id,p.timezone,CASE WHEN EXISTS(SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=p.tenant_id AND m.property_id=p.id AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)) THEN 'PAUSED' ELSE c.status END AS connection,c.last_sync AS "lastSync",c.mode AS source,
+      CASE WHEN c.mode='demo' THEN 'demo' WHEN EXISTS(SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=p.tenant_id AND m.property_id=p.id AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)) THEN 'stale' WHEN c.last_sync IS NULL THEN 'not_synced' WHEN c.status!='connected' OR c.last_sync<now()-${Math.max(180000, (Number(process.env.POLL_INTERVAL_MS) || 60000) * 3)}*interval '1 millisecond' THEN 'stale' ELSE 'synced' END AS freshness,
       (SELECT count(*)::int FROM reservations r WHERE r.tenant_id=p.tenant_id AND r.property_id=p.id AND r.arrival=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.status NOT IN ('Cancelled','NoShow')) AS arrivals,
       (SELECT count(*)::int FROM reservations r WHERE r.tenant_id=p.tenant_id AND r.property_id=p.id AND r.departure=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.status NOT IN ('Cancelled','NoShow')) AS departures,
       (SELECT count(*)::int FROM reservations r WHERE r.tenant_id=p.tenant_id AND r.property_id=p.id AND r.arrival<=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.departure>=coalesce(${q.date || null}::date,(now() AT TIME ZONE p.timezone)::date) AND r.status IN ('InHouse','DueOut')) AS "inHouse",
@@ -572,7 +573,7 @@ export async function buildApp(
       if (q.propertyId) property(u, q.propertyId);
       const columns =
         resource === "connections"
-          ? sql`id,property_id,mode,environment,status,last_sync,checkpoint`
+          ? sql`id,property_id,mode,environment,CASE WHEN EXISTS(SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=connections.tenant_id AND m.property_id=connections.property_id AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)) THEN 'PAUSED' ELSE status END AS status,last_sync,checkpoint`
           : sql`*`;
       const where = sql`tenant_id=${u.tenantId} AND (property_id IN (${scope(u)}) ${resource === "audit_logs" ? sql`OR property_id IS NULL` : sql``}) ${q.propertyId ? sql`AND property_id=${q.propertyId}` : sql``}`;
       return {
@@ -636,6 +637,17 @@ export async function buildApp(
     const p = property(u, (req.body as any)?.propertyId),
       jid = id.parse((req.params as any).id);
     await db.orm.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${u.tenantId},7291043001))`,
+      );
+      if (
+        (
+          await tx.execute(
+            sql`SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=${u.tenantId} AND m.property_id=${p} AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)`,
+          )
+        ).rows.length
+      )
+        throw fail(409, "Connection is paused or archived");
       const result = await tx.execute(
         sql`UPDATE retry_jobs SET state='queued',attempts=0,next_at=now(),lease_until=NULL WHERE id=${jid} AND tenant_id=${u.tenantId} AND property_id=${p} AND operation='reservation_poll' AND state IN ('dead','queued') RETURNING id`,
       );
@@ -645,21 +657,22 @@ export async function buildApp(
     });
     return { ok: true };
   });
+  registerLocalManagement(app, db);
   app.get("/api/admin", async (req) => {
     const u = req.principal;
     requireRole(canAdmin(u.role));
     return {
       tenants: await db.query(
-        sql`SELECT * FROM tenants WHERE id=${u.tenantId}`,
+        sql`SELECT * FROM tenants WHERE id=${u.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=tenants.id AND a.kind='tenants')`,
       ),
       organizations: await db.query(
-        sql`SELECT * FROM organizations WHERE tenant_id=${u.tenantId}`,
+        sql`SELECT * FROM organizations WHERE tenant_id=${u.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=organizations.tenant_id AND a.kind='organizations' AND a.target=organizations.id)`,
       ),
       properties: await db.query(
-        sql`SELECT * FROM properties WHERE tenant_id=${u.tenantId} AND id IN (${scope(u)})`,
+        sql`SELECT * FROM properties WHERE tenant_id=${u.tenantId} AND id IN (${scope(u)}) AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=properties.tenant_id AND a.kind='properties' AND a.target=properties.id)`,
       ),
       users: await db.query(
-        sql`SELECT u.id,u.name,u.email,m.role,(SELECT coalesce(json_agg(property_id),'[]') FROM property_grants g WHERE g.user_id=u.id AND g.tenant_id=m.tenant_id) AS properties FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=${u.tenantId}`,
+        sql`SELECT u.id,u.name,u.email,m.role,(SELECT coalesce(json_agg(property_id),'[]') FROM property_grants g WHERE g.user_id=u.id AND g.tenant_id=m.tenant_id) AS properties FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=${u.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND a.kind='users' AND a.target=m.user_id)`,
       ),
     };
   });
@@ -731,6 +744,18 @@ export async function buildApp(
     });
     return { ok: true };
   });
+  app.delete("/api/branding", async (req) => {
+    const u = req.principal;
+    requireRole(canAdmin(u.role));
+    await db.orm.transaction(async (tx) => {
+      await tx.execute(
+        sql`DELETE FROM branding_profiles WHERE tenant_id=${u.tenantId}`,
+      );
+      await audit(tx, u, null, "branding.reset", u.tenantId);
+      await appendEvent(tx, u.tenantId, null, "branding");
+    });
+    return { ok: true };
+  });
   app.post("/api/admin/organizations", async (req) => {
     const u = req.principal;
     requireRole(canAdmin(u.role));
@@ -766,7 +791,7 @@ export async function buildApp(
     if (
       !(
         await db.query(
-          sql`SELECT 1 FROM organizations WHERE id=${b.organizationId} AND tenant_id=${u.tenantId}`,
+          sql`SELECT 1 FROM organizations WHERE id=${b.organizationId} AND tenant_id=${u.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=organizations.tenant_id AND a.kind='organizations' AND a.target=organizations.id)`,
         )
       ).length
     )
@@ -842,6 +867,26 @@ export async function buildApp(
     targetGrants.forEach((g) => property(u, g.property_id));
     b.properties.forEach((p) => property(u, p));
     await db.orm.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${u.tenantId},7291043001))`,
+      );
+      if (
+        (
+          await tx.execute(
+            sql`SELECT 1 FROM local_archives WHERE tenant_id=${u.tenantId} AND kind='users' AND target=${uid}`,
+          )
+        ).rows.length
+      )
+        throw fail(404, "Membership not found");
+      if (
+        !canAdmin(b.role) &&
+        !(
+          await tx.execute(
+            sql`SELECT 1 FROM memberships m WHERE tenant_id=${u.tenantId} AND user_id!=${uid} AND role IN ('platform_admin','group_admin') AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND a.kind='users' AND a.target=m.user_id)`,
+          )
+        ).rows.length
+      )
+        throw fail(409, "Last administrator cannot be demoted");
       const grants = b.properties.length
         ? sql.join(
             b.properties.map((p) => sql`${p}`),

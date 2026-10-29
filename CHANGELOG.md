@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - Local UI actions and connection lifecycle (2026-10-29)
+
+- Replaced reservation detail action columns with accessible clickable rows and native read-only dialogs; room cards open cached read-only details.
+- Added local tenant/organization/property edit/archive, membership archive, and branding reset with confirmation, RBAC, tenant scope, dependency checks, last-administrator protection and transactional audit events.
+- Added administrator connection/property Stop/Resume and global Archive, affected-property confirmation, persistent pause flags, scheduler/enqueue/retry guards and centralized outbound dispatch locking.
+- Kept cached data available as Stale while paused, rejected results racing pause/resume using assignment revisions, and separated browser WebSocket, OHIP lifecycle and property freshness indicators.
+- Preserved the selected property and mounted SPA through transient identity refetch failures during Docker restart; authentication failures still return to login.
+- Added migration 0003 without changing stored credentials or deleting audit history; expanded UI, lifecycle, persistence, isolation and local CRUD regressions. No Oracle mutation endpoint, push or production deployment.
+
 ## Unreleased - Strict OHIP read-only V1 (2026-10-28)
 
 - Locked backend configuration to OHIP_ACCESS_MODE=read_only and OHIP_MUTATIONS_ENABLED=false, with safe defaults and startup rejection of any enabling value.

@@ -17,6 +17,7 @@ export type OhipScope = {
   hotelId: string;
   authorize: () => Promise<boolean>;
   cacheTtlMs?: number;
+  dispatch?: (send: () => Promise<Response>) => Promise<Response>;
 };
 export type OhipRoute = {
   tenant_id: string;
@@ -301,7 +302,7 @@ export class OhipHttpClient {
       )
         throw new OhipReadOnlyError();
       await enforceOhipPolicy(operation, path, options, this.route, this.scope);
-      if (this.transport === fetch && !this.audit)
+      if (this.transport === fetch && (!this.audit || !this.scope.dispatch))
         throw new OhipReadOnlyError();
     } catch (error) {
       await this.audit?.({
@@ -372,10 +373,14 @@ export class OhipHttpClient {
           this.route,
           this.scope,
         );
-        const r = await this.transport(base + path, {
-          ...options,
-          headers: { ...options.headers, "x-request-id": correlationId },
-        });
+        const dispatch = () =>
+          this.transport(base + path, {
+            ...options,
+            headers: { ...options.headers, "x-request-id": correlationId },
+          });
+        const r = await (this.scope.dispatch
+          ? this.scope.dispatch(dispatch)
+          : dispatch());
         status = r.status;
         return r;
       } catch (error) {

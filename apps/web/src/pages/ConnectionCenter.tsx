@@ -1,7 +1,9 @@
+import { canAdmin } from "@hospitality/contracts";
+import { useWorkspace } from "../workspace";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useData, write, time } from "../api";
-import { Badge, Empty, Pager, State } from "../components";
+import { Badge, Empty, Pager, State, ConfirmDialog } from "../components";
 type Assignment = {
   property_id: string;
   name: string;
@@ -11,6 +13,8 @@ type Assignment = {
   last_validated_at: string | null;
   last_sync: string | null;
   status: string;
+  paused: boolean;
+  data_status?: string;
 };
 type Connection = {
   id: string;
@@ -18,6 +22,8 @@ type Connection = {
   client_id: string;
   enterprise_id: string;
   status: string;
+  paused: boolean;
+  data_status?: string;
   health: string;
   last_connected: string | null;
   can_edit: boolean;
@@ -41,6 +47,13 @@ export default function ConnectionCenter({
   propertyId: string;
 }) {
   const client = useQueryClient();
+  const { user } = useWorkspace();
+  const [view, setView] = useState<Connection | null>(null);
+  const [control, setControl] = useState<{
+    c: Connection;
+    action: string;
+    global: boolean;
+  } | null>(null);
   const [page, setPage] = useState(1),
     [action, setAction] = useState<Action>("choose"),
     [selected, setSelected] = useState(""),
@@ -70,9 +83,7 @@ export default function ConnectionCenter({
           q.queryKey[0] === "ohip-connections" ||
           q.queryKey.includes(propertyId),
       });
-      setMessage(
-        "OHIP access verified. Connection and property assignment saved.",
-      );
+      setMessage("Action completed. Status and cached data refreshed.");
       return true;
     } catch (e) {
       const msg = (e as Error).message;
@@ -90,6 +101,53 @@ export default function ConnectionCenter({
   }
   return (
     <>
+      {control && (
+        <ConfirmDialog
+          title={`${control.action} connection`}
+          busy={busy}
+          onCancel={() => setControl(null)}
+          onConfirm={() =>
+            void request(`/ohip-connections/${control.c.id}/control`, {
+              action: control.action,
+              ...(control.global ? { confirmGlobal: true } : { propertyId }),
+            }).then((ok) => {
+              if (ok) setControl(null);
+            })
+          }
+        >
+          {control.global
+            ? `Affects ${control.c.assigned_properties.length} properties: ${control.c.assigned_properties.map((m) => m.name).join(", ")}.`
+            : `Affects only ${control.c.assigned_properties.find((m) => m.property_id === propertyId)?.name}.`}{" "}
+          Credentials, mappings and Oracle data are retained.
+        </ConfirmDialog>
+      )}
+      {view && (
+        <section
+          className="panel"
+          role="region"
+          aria-label="Connection details"
+        >
+          <h2>View Connection</h2>
+          <p>
+            {view.base_url} / {view.client_id} / {view.enterprise_id}
+          </p>
+          <p>
+            OHIP Connection:{" "}
+            {view.paused
+              ? "Paused"
+              : view.health === "degraded"
+                ? "Error"
+                : "Active"}
+          </p>
+          {view.assigned_properties.map((m) => (
+            <p key={m.property_id}>
+              {m.name}: {m.hotel_id} / {m.status} / Property Data:{" "}
+              {m.data_status}
+            </p>
+          ))}
+          <button onClick={() => setView(null)}>Close</button>
+        </section>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -161,7 +219,12 @@ export default function ConnectionCenter({
                                 : "amber"
                             }
                           >
-                            {c.health || c.status}
+                            OHIP Connection:{" "}
+                            {c.paused
+                              ? "Paused"
+                              : c.health === "degraded"
+                                ? "Error"
+                                : "Active"}
                           </Badge>
                         </td>
                         <td>{time(c.last_connected)}</td>
@@ -178,12 +241,60 @@ export default function ConnectionCenter({
                                 {m.status || "not connected"}
                               </small>
                               <small>
-                                Last validated: {time(m.last_validated_at)}
+                                Property Data: {m.data_status || "Unavailable"}{" "}
+                                ? Last validated: {time(m.last_validated_at)}
                               </small>
                             </div>
                           ))}
                         </td>
                         <td>
+                          <button disabled={busy} onClick={() => setView(c)}>
+                            View Connection
+                          </button>
+                          {canAdmin(user.role) && (
+                            <>
+                              {current && (
+                                <button
+                                  disabled={busy || c.paused}
+                                  onClick={() =>
+                                    setControl({
+                                      c,
+                                      action: current.paused
+                                        ? "resume"
+                                        : "pause",
+                                      global: false,
+                                    })
+                                  }
+                                >
+                                  {current.paused ? "Resume" : "Stop"} Property
+                                </button>
+                              )}
+                              <button
+                                disabled={busy || !c.can_edit}
+                                onClick={() =>
+                                  setControl({
+                                    c,
+                                    action: c.paused ? "resume" : "pause",
+                                    global: true,
+                                  })
+                                }
+                              >
+                                {c.paused ? "Resume" : "Stop"} Entire Connection
+                              </button>
+                              <button
+                                disabled={busy || !c.can_edit}
+                                onClick={() =>
+                                  setControl({
+                                    c,
+                                    action: "archive",
+                                    global: true,
+                                  })
+                                }
+                              >
+                                Archive Connection
+                              </button>
+                            </>
+                          )}
                           {current ? (
                             <>
                               <button
@@ -200,7 +311,7 @@ export default function ConnectionCenter({
                                 </small>
                               )}
                               <button
-                                disabled={busy}
+                                disabled={busy || c.paused || current.paused}
                                 onClick={() =>
                                   void request(
                                     `/ohip-connections/${c.id}/test`,

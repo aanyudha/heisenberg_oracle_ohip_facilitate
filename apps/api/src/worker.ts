@@ -1,3 +1,4 @@
+import { connectionDispatch } from "./connection-control.js";
 import { randomUUID, createHash } from "node:crypto";
 import { sql, type Database } from "./db.js";
 import {
@@ -35,6 +36,8 @@ export function worker(
       c.enterprise_id,
       c.hotel_id,
       c.mode,
+      c.control_revision,
+      c.credential_revision,
     ]);
     if (existing && existing.secret === revision) return existing.adapter;
     const a =
@@ -54,10 +57,21 @@ export function worker(
               connectionId: c.connection_id,
               hotelId: c.hotel_id,
               cacheTtlMs: 5000,
+              dispatch: connectionDispatch(
+                db,
+                c.tenant_id,
+                c.property_id,
+                c.connection_id,
+                {
+                  credentialRevision: c.credential_revision,
+                  assignmentRevision: String(c.control_revision),
+                  hotelId: c.hotel_id,
+                },
+              ),
               authorize: async () =>
                 !!(
                   await db.query(
-                    sql`SELECT 1 FROM connections s JOIN ohip_connection_properties m ON m.tenant_id=s.tenant_id AND m.property_id=s.property_id JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE s.tenant_id=${c.tenant_id} AND s.property_id=${c.property_id} AND s.mode='real' AND m.connection_id=${c.connection_id} AND m.hotel_id=${c.hotel_id} AND m.validation_status='validated' AND o.updated_at::text=${c.credential_revision}`,
+                    sql`SELECT 1 FROM connections s JOIN ohip_connection_properties m ON m.tenant_id=s.tenant_id AND m.property_id=s.property_id JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE s.tenant_id=${c.tenant_id} AND s.property_id=${c.property_id} AND s.mode='real' AND NOT m.paused AND NOT o.paused AND o.archived_at IS NULL AND m.connection_id=${c.connection_id} AND m.hotel_id=${c.hotel_id} AND m.control_revision=${c.control_revision} AND m.validation_status='validated' AND o.updated_at::text=${c.credential_revision}`,
                   )
                 ).length,
             },
@@ -73,12 +87,23 @@ export function worker(
         sql`UPDATE retry_jobs SET state='queued',lease_until=NULL WHERE state='running' AND lease_until<now()`,
       );
       const connections = await db.query(
-        sql`UPDATE connections SET lease_until=now()+interval '15 minutes',next_poll=now()+${Math.max(30000, Number(process.env.POLL_INTERVAL_MS) || 60000)}*interval '1 millisecond' WHERE id IN (SELECT id FROM connections s WHERE next_poll<=now() AND (lease_until IS NULL OR lease_until<now()) AND (mode='demo' OR EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=s.tenant_id AND m.property_id=s.property_id AND m.validation_status='validated')) ORDER BY next_poll LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING *`,
+        sql`UPDATE connections SET lease_until=now()+interval '15 minutes',next_poll=now()+${Math.max(30000, Number(process.env.POLL_INTERVAL_MS) || 60000)}*interval '1 millisecond' WHERE id IN (SELECT id FROM connections s WHERE NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=s.tenant_id AND ((a.kind='properties' AND a.target=s.property_id) OR a.kind='tenants')) AND NOT EXISTS(SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=s.tenant_id AND m.property_id=s.property_id AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)) AND next_poll<=now() AND (lease_until IS NULL OR lease_until<now()) AND (mode='demo' OR EXISTS(SELECT 1 FROM ohip_connection_properties m WHERE m.tenant_id=s.tenant_id AND m.property_id=s.property_id AND m.validation_status='validated')) ORDER BY next_poll LIMIT 5 FOR UPDATE SKIP LOCKED) RETURNING *`,
       );
       for (const c of connections) {
-        await db.query(
-          sql`INSERT INTO retry_jobs(id,tenant_id,property_id,operation,idempotency_key,state) VALUES (${randomUUID()},${c.tenant_id},${c.property_id},'reservation_poll',${randomUUID()},'queued') ON CONFLICT DO NOTHING`,
-        );
+        await db.orm.transaction(async (tx) => {
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtextextended(${c.tenant_id},7291043001))`,
+          );
+          const blocked = (
+            await tx.execute(
+              sql`SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=${c.tenant_id} AND m.property_id=${c.property_id} AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)`,
+            )
+          ).rows.length;
+          if (!blocked)
+            await tx.execute(
+              sql`INSERT INTO retry_jobs(id,tenant_id,property_id,operation,idempotency_key,state) VALUES (${randomUUID()},${c.tenant_id},${c.property_id},'reservation_poll',${randomUUID()},'queued') ON CONFLICT DO NOTHING`,
+            );
+        });
         await db.query(
           sql`UPDATE connections SET lease_until=NULL WHERE id=${c.id}`,
         );
@@ -88,13 +113,13 @@ export function worker(
         // not consume their lease while earlier network requests are running.
         const job = (
           await db.query(
-            sql`UPDATE retry_jobs SET state='running',lease_until=now()+interval '15 minutes' WHERE id IN (SELECT id FROM retry_jobs WHERE state='queued' AND next_at<=now() ORDER BY next_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`,
+            sql`UPDATE retry_jobs SET state='running',lease_until=now()+interval '15 minutes' WHERE id IN (SELECT id FROM retry_jobs WHERE state='queued' AND NOT EXISTS(SELECT 1 FROM ohip_connection_properties m JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE m.tenant_id=retry_jobs.tenant_id AND m.property_id=retry_jobs.property_id AND (m.paused OR o.paused OR o.archived_at IS NOT NULL)) AND next_at<=now() ORDER BY next_at LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`,
           )
         )[0];
         if (!job) break;
         const c = (
           await db.query(
-            sql`SELECT c.*,p.timezone,m.hotel_id AS mapped_hotel_id,m.validation_status,o.id AS connection_id,o.base_url,o.client_id,o.encrypted_client_secret,o.encrypted_app_key,o.enterprise_id AS mapped_enterprise_id,o.updated_at::text AS credential_revision FROM connections c JOIN properties p ON p.tenant_id=c.tenant_id AND p.id=c.property_id LEFT JOIN ohip_connection_properties m ON m.tenant_id=c.tenant_id AND m.property_id=c.property_id LEFT JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE c.tenant_id=${job.tenant_id} AND c.property_id=${job.property_id}`,
+            sql`SELECT c.*,p.timezone,m.control_revision,m.hotel_id AS mapped_hotel_id,m.validation_status,o.id AS connection_id,(o.paused OR m.paused OR o.archived_at IS NOT NULL) AS paused,o.base_url,o.client_id,o.encrypted_client_secret,o.encrypted_app_key,o.enterprise_id AS mapped_enterprise_id,o.updated_at::text AS credential_revision FROM connections c JOIN properties p ON p.tenant_id=c.tenant_id AND p.id=c.property_id LEFT JOIN ohip_connection_properties m ON m.tenant_id=c.tenant_id AND m.property_id=c.property_id LEFT JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE c.tenant_id=${job.tenant_id} AND c.property_id=${job.property_id}`,
           )
         )[0];
         const started = Date.now(),
@@ -102,6 +127,7 @@ export function worker(
         try {
           if (!c || !retrySafe(job.operation))
             throw new OhipError(400, "unsafe_operation");
+          if (c.paused) throw new OhipError(409, "connection_changed");
           if (c.mode === "real") {
             if (!c.connection_id || c.validation_status !== "validated")
               throw new OhipError(403, "property_not_validated");
@@ -128,7 +154,7 @@ export function worker(
               if (
                 !(
                   await tx.execute(
-                    sql`SELECT 1 FROM connections s JOIN ohip_connection_properties m ON m.tenant_id=s.tenant_id AND m.property_id=s.property_id JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE s.tenant_id=${job.tenant_id} AND s.property_id=${job.property_id} AND s.mode='real' AND m.connection_id=${c.connection_id} AND m.hotel_id=${c.hotel_id} AND m.validation_status='validated' AND o.updated_at::text=${c.credential_revision}`,
+                    sql`SELECT 1 FROM connections s JOIN ohip_connection_properties m ON m.tenant_id=s.tenant_id AND m.property_id=s.property_id JOIN ohip_connections o ON o.tenant_id=m.tenant_id AND o.id=m.connection_id WHERE s.tenant_id=${job.tenant_id} AND s.property_id=${job.property_id} AND s.mode='real' AND NOT m.paused AND NOT o.paused AND o.archived_at IS NULL AND m.connection_id=${c.connection_id} AND m.hotel_id=${c.hotel_id} AND m.control_revision=${c.control_revision} AND m.validation_status='validated' AND o.updated_at::text=${c.credential_revision}`,
                   )
                 ).rows.length
               )
