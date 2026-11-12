@@ -7,6 +7,10 @@ export { OhipError, classify, validateGateway } from "./ohip-gateway.js";
 import { OhipHttpClient, OCIM_SCOPE, type OhipScope } from "./ohip-policy.js";
 export { OCIM_SCOPE } from "./ohip-policy.js";
 import { credentials } from "./connection-store.js";
+import {
+  mapHousekeepingOverview,
+  mergeHousekeepingTasks,
+} from "./housekeeping-mapper.js";
 type TokenState = {
   token: string;
   expires: number;
@@ -269,6 +273,81 @@ export class RealOhipAdapter implements OperationsAdapter {
       }
     }
     return { status: "connected" as const };
+  }
+  private async housekeepingGet(path: string, operation: string) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await this.authenticate();
+      const token = this.state.token;
+      const r = await this.request(
+        path,
+        {
+          method: "GET",
+          redirect: "error",
+          signal: AbortSignal.timeout(20000),
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "x-app-key": this.secret.applicationKey,
+            "x-hotelid": this.connection.hotel_id,
+          },
+        },
+        operation,
+      );
+      if (r.status !== 401 || attempt === 1) {
+        if (!r.ok)
+          throw new OhipError(r.status, classify(r.status), retryAfter(r));
+        return r;
+      }
+      if (this.state.token === token) this.state.expires = 0;
+    }
+    throw new OhipError(401, "authentication");
+  }
+  async readHousekeeping(date: string) {
+    const deadline = Date.now() + 120000;
+    const hotel = encodeURIComponent(this.connection.hotel_id),
+      rooms: import("@hospitality/contracts").WorksheetRoom[] = [];
+    let offset = 0;
+    for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
+      if (Date.now() > deadline) throw new OhipError(0, "poll_deadline");
+      const r = await this.housekeepingGet(
+        `/hsk/v1/hotels/${hotel}/housekeepingOverview?limit=100&offset=${offset}&fetchInstructions=ResvInfo`,
+        "getHousekeepingOverview",
+      );
+      if (r.status === 204) break;
+      const page = mapHousekeepingOverview(
+        await r.json(),
+        date,
+        this.connection.hotel_id,
+        offset,
+      );
+      rooms.push(...page.rooms);
+      if (!page.hasMore) break;
+      if (!page.rawCount) throw new OhipError(422, "empty_pagination_page");
+      offset += page.rawCount;
+      if (offset > 9900 || pageNumber === 99)
+        throw new OhipError(422, "pagination_limit");
+    }
+    if (new Set(rooms.map((r) => r.id)).size !== rooms.length)
+      throw new OhipError(422, "duplicate_room_feed");
+    let taskError: string | null = null,
+      merged = rooms;
+    if (rooms.length)
+      try {
+        const r = await this.housekeepingGet(
+          `/hsk/v1/hotels/${hotel}/houseKeepingtasks?taskDate=${encodeURIComponent(date)}&generateCleaningSequence=false&includeReservationInfo=false&includeTaskSheetDetails=true&includeTaskSheetsSummary=true`,
+          "getHouseKeepingTasks",
+        );
+        if (r.status !== 204)
+          merged = mergeHousekeepingTasks(
+            rooms,
+            await r.json(),
+            date,
+            this.connection.hotel_id,
+          );
+      } catch (error) {
+        const e = error as { classification?: string };
+        taskError = `Existing OPERA task sheets unavailable (${e.classification || "contract"}). Local credit configuration is used where available.`;
+      }
+    return { rooms: merged, taskError };
   }
   async read(date: string, knownIds: string[] = []) {
     const items: Omit<Reservation, "updated_at">[] = [];

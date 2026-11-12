@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased - Housekeeping Worksheet UX (2026-11-12)
+
+- Replaced the daily multi-form rooms assignment UI with one drag/drop worksheet: unassigned lane, registered supervisor groups, attendants, multi-select assignment, filters, debounced local autosave, optimistic totals, rollback and undo.
+- Added atomically transferred supervisor coverage/team/room moves over the existing assignment tables, property revisions, idempotent mutations, full audit/undo plans and scoped WebSocket invalidation. Staff availability defaults on first use only when no explicit unavailable schedule exists.
+- Added strict, contract-reviewed GET room overview and existing task-sheet reads; forced generateCleaningSequence=false and preserved all Oracle mutation guards. Live feed failure/denial shows a clear empty state and never substitutes DEMO, manual Unknown rooms or invented credits.
+- Added My Worksheet/My Team landing views, authorized mobile Assign To, browser-only A4 print preview/Save PDF and per-attendant page breaks.
+- Added migration 0005 for room feed cache, worksheet change history, provenance/active-link metadata and date/shift event details; retained prior data, migrations, users, RBAC, old APIs, Fastify WebSocket and SPA deployment.
+- Added API/feed/policy, concurrency, autosave/rollback, undo, native drag/drop, print/PDF and responsive browser regressions. Tests use disposable databases and synthetic OHIP contracts; no production push/deployment or live Oracle write.
+
+## Unreleased - Local Housekeeping assignments (2026-11-12)
+
+- Added Supervisor/Room Attendant directory metadata referencing registered users, active tenant memberships and property grants; no duplicate user identity table.
+- Added migration 0004: property shifts, dated availability schedules, mixed supervisor floor/room coverage, attendant supervisor/floor/section/room assignments, retained room assignment history, and validated room mapping with workload credits.
+- Added transactionally serialized, audited local APIs under `/api/local-housekeeping`, coverage checks, active-room uniqueness per date/shift, and server-side manager/authorized-supervisor/attendant/IT/admin permissions.
+- Extended `/operations/rooms` with morning briefing, unassigned resources, workload imbalance warnings, and end-of-shift OPERA snapshot comparisons independent of explicit local progress. Preserved existing read-only snapshot cards for administrative/front-office roles.
+- Added property/role scoped WebSocket invalidation, live permission revocation checks and Housekeeping refresh on room/reservation snapshot events.
+- Preserved strict OHIP mutation guards, outbound operation allowlist, Fastify WebSocket, SPA, and OHIP Task Sheets. Existing adapter has no live OHIP room feed; cached room data is labeled accordingly.
+- Added API, permission, isolation, credit aggregation, snapshot/progress, realtime and browser smoke regressions using disposable databases. No production migration, push, or deployment.
+
 ## Unreleased - Local UI actions and connection lifecycle (2026-10-29)
 
 - Replaced reservation detail action columns with accessible clickable rows and native read-only dialogs; room cards open cached read-only details.

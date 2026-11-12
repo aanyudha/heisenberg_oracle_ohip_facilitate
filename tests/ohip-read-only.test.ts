@@ -355,6 +355,8 @@ describe("strict OHIP read-only policy", () => {
       ).toMatch(/Marks the reservation/);
     }
     expect(Object.keys(APPROVED_OHIP_OPERATIONS).sort()).toEqual([
+      "getHouseKeepingTasks",
+      "getHousekeepingOverview",
       "getReservation",
       "oauth_token",
       "searchHotelReservations",

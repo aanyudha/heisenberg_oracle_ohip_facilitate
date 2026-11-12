@@ -67,6 +67,8 @@ export async function migrate(db: Database) {
       ["0001", "0001_initial.sql"],
       ["0002", "0002_ocim_connections.sql"],
       ["0003", "0003_local_controls.sql"],
+      ["0004", "0004_housekeeping.sql"],
+      ["0005", "0005_housekeeping_worksheet.sql"],
     ]) {
       if (
         (

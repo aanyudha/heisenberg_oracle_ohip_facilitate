@@ -17,13 +17,14 @@ export async function appendEvent(
   tenant: string,
   property: string | null,
   topic: string,
+  details: { kind?: string; date?: string; shiftId?: string } = {},
 ) {
   // Allocate sequence numbers in commit order. Otherwise a later transaction can
   // commit first and make an earlier, still-uncommitted event fall behind cursors.
   // All callers append only after their business writes and audit entries.
   await tx.execute(sql`LOCK TABLE change_events IN SHARE ROW EXCLUSIVE MODE`);
   await tx.execute(
-    sql`INSERT INTO change_events(tenant_id,property_id,topic) VALUES (${tenant},${property},${topic})`,
+    sql`INSERT INTO change_events(tenant_id,property_id,topic,details) VALUES (${tenant},${property},${topic},${JSON.stringify(details)}::jsonb)`,
   );
 }
 export function realtime(db: Database) {
@@ -44,7 +45,7 @@ export function realtime(db: Database) {
       }
       // Re-read grants: revocation applies to established sockets too.
       const memberships = await db.query(
-        sql`SELECT m.role FROM memberships m JOIN sessions s ON s.tenant_id=m.tenant_id AND s.user_id=m.user_id WHERE m.tenant_id=${c.user.tenantId} AND m.user_id=${c.user.id} AND s.token_hash=${c.user.tokenHash} AND s.expires_at>now()`,
+        sql`SELECT m.role FROM memberships m JOIN sessions s ON s.tenant_id=m.tenant_id AND s.user_id=m.user_id WHERE m.tenant_id=${c.user.tenantId} AND m.user_id=${c.user.id} AND s.token_hash=${c.user.tokenHash} AND s.expires_at>now() AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND (a.kind='tenants' OR (a.kind='users' AND a.target=m.user_id)))`,
       );
       if (!memberships.length) {
         c.socket.close(1008, "Access revoked");
@@ -70,14 +71,14 @@ export function realtime(db: Database) {
         )[0].seq,
       );
       const events = await db.query(
-        sql`SELECT seq,property_id,topic,created_at FROM change_events WHERE tenant_id=${c.user.tenantId} AND seq>${c.cursor} AND seq<=${high} AND (property_id IS NULL OR property_id IN (${
+        sql`SELECT seq,property_id,topic,created_at,details FROM change_events WHERE tenant_id=${c.user.tenantId} AND seq>${c.cursor} AND seq<=${high} AND (property_id IS NULL OR property_id IN (${
           grants.length
             ? sql.join(
                 grants.map((p) => sql`${p}`),
                 sql`, `,
               )
             : sql`NULL`
-        })) ORDER BY seq LIMIT 101`,
+        })) AND (topic!='housekeeping' OR ${["platform_admin", "group_admin", "hotel_manager", "it"].includes(memberships[0].role)} OR (${memberships[0].role}='housekeeping' AND EXISTS(SELECT 1 FROM housekeeping_staff_profiles h WHERE h.tenant_id=change_events.tenant_id AND h.property_id=change_events.property_id AND h.user_id=${c.user.id}))) ORDER BY seq LIMIT 101`,
       );
       if (events.length > 100)
         c.socket.send(JSON.stringify({ topic: "reconcile", seq: high }));
@@ -88,6 +89,7 @@ export function realtime(db: Database) {
               seq: Number(e.seq),
               propertyId: e.property_id,
               topic: e.topic,
+              details: e.details,
               at: e.created_at,
             }),
           );

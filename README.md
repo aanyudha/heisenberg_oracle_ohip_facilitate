@@ -93,6 +93,18 @@ Backend memakai OCIM Client Credentials ke `baseUrl/oauth/v1/tokens`, scope teta
 
 Migrasi `0002_ocim_connections.sql` dan backfill transaksional memisahkan credentials ke `ohip_connections` dan Hotel ID ke `ohip_connection_properties`. Backup database dan simpan ENCRYPTION_KEY asli sebelum upgrade. Migrasi mempertahankan credentials serta assignment lama, menyatukan credentials identik hanya dalam tenant, dan mempertahankan kolom chain historis. Key yang salah membatalkan seluruh migrasi. Assignment lama tanpa bukti koneksi sukses berstatus pending sampai **Test Connection** berhasil. [Detail migrasi dan API](docs/OHIP_OCIM.md).
 
+## Housekeeping Worksheet
+
+Buka `/operations/rooms`: satu worksheet untuk memuat kamar OPERA, drag/drop kamar dan attendant, lalu **Print Worksheet**. Property/business date memakai selector existing; shift, Last OHIP sync, filter floor/status/room type, batch assignment dan Undo tersedia pada layar yang sama. Assignment autosave lokal dengan debounce, optimistic update, rollback, transaksi, revision check dan audit. Coverage supervisor serta jadwal staff diselesaikan otomatis saat assignment; tidak ada Save per kamar atau form setup harian.
+
+Kamar live berasal dari GET `getHousekeepingOverview`; task/credits dilengkapi dari GET existing task sheets `getHouseKeepingTasks` dengan **generateCleaningSequence=false**. OAuth dan polling reservation read-only existing dipertahankan. Tidak ada mutasi status kamar, task sheet, atau assignment Oracle. Jika feed tidak tersedia/authorized, tampilkan empty/error state; tidak ada fallback DEMO atau kamar Unknown buatan. Floor berasal dari OHIP atau override directory tervalidasi. Credits ditandai OHIP, Local rule, atau belum dikonfigurasi.
+
+Registered users, membership tenant/property, Housekeeping role metadata, RBAC, dan assignment existing tetap dipakai. Attendant login langsung ke **My Worksheet**; supervisor ke **My Team**. Update masuk lewat Fastify WebSocket. Konfigurasi administratif existing dipisahkan ke `/operations/rooms-settings`. Migration 0005 menambah cache feed dan audit/undo worksheet tanpa mengganti migration/data sebelumnya.
+
+Print preview menggunakan HTML/CSS A4 portrait, page break per attendant, total attendant/supervisor, status, task, credits dan remarks. Tombol Print/Save PDF memakai browser, tanpa layanan eksternal. [Kontrak, audit UX dan batas operasional](docs/HOUSEKEEPING.md).
+
+Smoke terisolasi: `npm.cmd run build` lalu `npm.cmd run test:housekeeping-smoke`. Test memakai database disposable dan port acak, tidak mengubah `.env` atau runtime/database pemilik. Live OHIP perlu acceptance terhadap entitlement dan response properti nyata; hasil lokal bukan bukti production.
+
 ## Verifikasi
 
 ```sh

@@ -744,6 +744,8 @@ describe("OCIM connection center", () => {
       mutationsEnabled: false,
     });
     expect(Object.keys(policy.json().operations).sort()).toEqual([
+      "getHouseKeepingTasks",
+      "getHousekeepingOverview",
       "getReservation",
       "oauth_token",
       "searchHotelReservations",

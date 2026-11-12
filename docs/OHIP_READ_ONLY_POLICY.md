@@ -1,6 +1,6 @@
 # Strict OHIP read-only policy - V1
 
-V1 views and monitors OPERA snapshots. It cannot create, update, cancel or delete Oracle business data. Read-only is enforced by executable backend policy rather than by the absence of frontend buttons alone. No customer credentials are changed by this lock, and no database migration is added.
+OPERA integration views and monitors snapshots. It cannot create, update, cancel or delete Oracle business data. Read-only is enforced by executable backend policy rather than by the absence of frontend buttons alone. Local Housekeeping worksheet assignments are application data; their additive schema is documented in [HOUSEKEEPING.md](HOUSEKEEPING.md). Customer credentials are not changed by this policy.
 
 ## Configuration and trust boundary
 
@@ -24,6 +24,8 @@ A missing/false authorization proof fails closed. Mock transports in tests carry
 | `oauth_token` | POST `/oauth/v1/tokens` | Exactly `grant_type=client_credentials`, backend scope `urn:opc:hgbu:ws:__myscopes__`, Basic client auth, application key and matching enterpriseId | OCIM token acquisition/renewal; local audit alias for Oracle's officially named OAuth request |
 | `searchHotelReservations` | POST `/rsv/v1/hotels/{assignedHotelId}/reservations/searches` | Strict bounded search only; see below | Polling and connection/property validation |
 | `getReservation` | GET `/rsv/v1/hotels/{assignedHotelId}/reservations/{reservationId}?markAsRecentlyAccessed=false&includeInSession=false` | Both false flags mandatory; no body, other query parameter or unknown header | Approved at the policy boundary and covered by mock tests; no new live business endpoint/controller added. Existing UI details continue to read the local cache. |
+| `getHousekeepingOverview` | GET `/hsk/v1/hotels/{assignedHotelId}/housekeepingOverview?limit=100&offset={boundedOffset}&fetchInstructions=ResvInfo` | No body; exact query keys; integer offset 0–9900; validated active property binding | Worksheet room snapshot; bounded pagination, stripped guest PII |
+| `getHouseKeepingTasks` | GET `/hsk/v1/hotels/{assignedHotelId}/houseKeepingtasks?taskDate={date}&generateCleaningSequence=false&includeReservationInfo=false&includeTaskSheetDetails=true&includeTaskSheetsSummary=true` | Exact false/true flags and ISO date; no body or arbitrary status-change query | Read existing task sheets/credits; never generate sequence, task sheets or assignments |
 
 The business operation IDs/methods/path templates are checked against retained official Oracle RSV specs for release tags 26.2, 26.3 and v26.4. The v26.4 RSV document identifies its schema as 26.3.0.0; this is not a claim of a separate 26.4 schema. [Official Oracle RSV specification](https://github.com/oracle/hospitality-api-docs/blob/main/rest-api-specs/property/v1/rsv.json).
 
@@ -31,7 +33,7 @@ Search accepts only `searchType`, `limit` (1-100), `offset` (0-1900), and the ap
 
 **Classification limits:** Oracle documents `getReservation.markAsRecentlyAccessed` as marking a reservation recently accessed; it must never be true or left implicit here. The implementation also forces includeInSession=false, and denies other GET variants rather than assuming their defaults. The official OCIM example names the OAuth request but the retained RSV fixtures do not publish an OAuth machine operationId; `oauth_token` is explicitly a local alias, not a fabricated Oracle operationId. Its authentication-only endpoint/body/header semantics are independently pinned. [Official Oracle OCIM request](https://www.postman.com/hospitalityapis/oracle-hospitality-apis/request/yvi8whu/get-oauth-token-for-client-credentials-environments).
 
-No other outbound operation is approved. Profile lookup, room/housekeeping lookup, availability and reports need their own authoritative contract/semantics audit before approval; this task does not add modules or assume those APIs are safe. Current guest summaries and room views are existing local snapshots, not a claim that a live CRM/housekeeping feed is connected.
+No other outbound operation is approved. Profile lookup, other housekeeping operations, availability and reports still require their own authoritative contract/semantics audit. The two worksheet GETs are pinned to the [official HSK 26.3 contract](https://github.com/oracle/hospitality-api-docs/blob/26.3/rest-api-specs/property/v1/hsk.json). In particular, GET `generateCleaningSequence=true` can generate a sequence, so true or an omitted flag is denied. `getTaskCompanion` and task-sheet generation remain unapproved. Local fixture acceptance does not establish live property entitlement or compatibility.
 
 ## Blocked operations and direct API requests
 
@@ -41,7 +43,7 @@ The backend returns HTTP 403 with `{ "error": "OHIP_READ_ONLY_POLICY" }` for dir
 
 Existing cached read endpoints (`GET /api/overview`, `/api/reservations`, `/api/reservations/:id`, `/api/rooms`, and monitoring reads) retain session, tenant/property and guest-role checks. `GET /api/ohip-policy` exposes only the immutable approved registry to authorized integration users. Local `/api/ohip-connections` configuration/assignment/test routes remain allowed and can only dispatch the approved authentication/access checks.
 
-Operational task/room forms, assignment/status selectors, room-state buttons and related-task creation are absent from UI. Legacy local task/room write APIs are denied on Oracle-mapped properties. They remain local-only on non-Oracle/demo properties for compatibility and synthetic realtime/persistence tests; they have no Oracle write code path. This exception cannot enable an Oracle operation, regardless of payload or role. Local administrative identity/branding/connection writes are internal configuration, not PMS commands.
+Oracle task/room write controls and related-task creation remain absent. Local-only worksheet assignment controls are available under `/api/local-housekeeping`, guarded by session/CSRF/RBAC and tenant/property/date/shift scope. They never call an Oracle mutation. Legacy local task/room write APIs remain denied on Oracle-mapped properties and are local-only on non-Oracle/demo properties for compatibility and synthetic tests. Local administrative identity/branding/connection writes are internal configuration, not PMS commands.
 
 ## UI, realtime and cache
 

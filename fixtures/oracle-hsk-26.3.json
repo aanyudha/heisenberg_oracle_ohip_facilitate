@@ -1,0 +1,681 @@
+{
+  "source": "https://github.com/oracle/hospitality-api-docs/blob/26.3/rest-api-specs/property/v1/hsk.json",
+  "info": {
+    "title": "OPERA Cloud Housekeeping Service API",
+    "description": "APIs to cater for Housekeeping functionality in OPERA Cloud. <br /><br />Housekeeping enables you to schedule daily room cleaning, maintenance, and housekeeping staff activities. It provides information on room status, out of order/out of service rooms, and forecasting.<br /><br /> Compatible with OPERA Cloud release 26.3.0.0.<br /><br /><p> This document and all content within is available under the Universal Permissive License v 1.0 (https://oss.oracle.com/licenses/upl). Copyright (c) 2020, 2026 Oracle and/or its affiliates.</p>",
+    "version": "26.3.0.0",
+    "termsOfService": "https://www.oracle.com/legal/terms.html",
+    "contact": {
+      "email": "hospitality-integrations_ww@oracle.com"
+    },
+    "license": {
+      "name": "UPL",
+      "url": "https://opensource.org/licenses/upl"
+    }
+  },
+  "paths": {
+    "/hotels/{hotelId}/housekeepingOverview": {
+      "get": {
+        "operationId": "getHousekeepingOverview",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Indicates maximum number of records a Web Service should return.",
+            "type": "integer"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "default": 0,
+            "required": false,
+            "description": "Index or initial index of the set(page) being requested. If the index goes out of the bounds of the total set count then no data will be returned.",
+            "type": "integer"
+          },
+          {
+            "name": "housekeepingRoomStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for room status instructions to be used in requests for fetching housekeeping rooms. Valid status values are Clean, Dirty, Pickup, Inspected, OutOfOrder, OutOfService.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Clean",
+                "Dirty",
+                "Pickup",
+                "Inspected",
+                "OutOfOrder",
+                "OutOfService"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "frontOfficeRoomStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for front office room status instructions to be used in requests for fetching housekeeping rooms. Valid values are Vacant and Occupied.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Vacant",
+                "Occupied"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "turndownStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for turndown status instructions to be used in requests for fetching housekeeping rooms. Valid status values are Required, Not Required and Completed.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Required",
+                "NotRequired",
+                "Compeleted"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "roomParityStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for room parity instructions to be used in requests for fetching housekeeping rooms. Valid status values are Odd and Even.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Odd",
+                "Even"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "serviceRequestStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Open",
+                "PendingFollowUp",
+                "Closed",
+                "DoNotDisturb",
+                "MakeUpRoom"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "roomAssignmentStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Assigned",
+                "Unassigned"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "fetchInstructions",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for housekeeping instructions that can be used in requests for partial operations. When ScheduedRoomMoveInfo instruction is set to true, get only the rooms with a scheduled room move, along with the associated reservation information. When false, scheduled room move information is not included in the response. The scheduled room move information will assist housekeeping associates to prioritize rooms for cleaning.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Summary",
+                "ResvInfo",
+                "TurndownInfo",
+                "ScheduedRoomMoveInfo",
+                "ResvQueueInfo",
+                "AttendantInRoomInfo"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "fromRoomNumber",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "toRoomNumber",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "floor",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "The floor of room to be fetched.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "roomType",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Room Type of the Room.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "roomClass",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Room Class of the Room.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "building",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Building of the Room.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "roomFeatures",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Features of the Room.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "daySection",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "AM Sections of the Room.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "eveningSection",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "PM Sections of the Room.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "reservationStatus",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "The status of the reservation to which this Room is assigned.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "guestServiceRequest",
+            "in": "query",
+            "required": false,
+            "type": "string",
+            "description": "Possible values for the Guest Service Status.",
+            "uniqueItems": true,
+            "enum": [
+              "DoNotDisturb",
+              "MakeUpRoom",
+              "NoStatusSelected",
+              "ServiceDeclined"
+            ]
+          },
+          {
+            "name": "roomIdText",
+            "in": "query",
+            "required": false,
+            "description": "Wild Card entry for Room numbers to be Fetched.",
+            "type": "string"
+          },
+          {
+            "name": "excludeCombo",
+            "in": "query",
+            "required": false,
+            "description": "Indicates we need to exclude the combo rooms while fetching the housekeeping details.",
+            "type": "boolean"
+          },
+          {
+            "name": "cleaningPriorityOnly",
+            "in": "query",
+            "required": false,
+            "description": "Determines whether fetching cleaning priority rooms only.",
+            "type": "boolean"
+          },
+          {
+            "name": "scheduledRoomMovesOnly",
+            "in": "query",
+            "required": false,
+            "description": "This flag indicates true or false. When it is set to true, get only the rooms with a scheduled room move, along with the associated reservation information. When false, scheduled room move information is not included in the response. The scheduled room move information will assist housekeeping associates to prioritize rooms for cleaning.",
+            "type": "boolean"
+          },
+          {
+            "name": "attendantInRoomOnly",
+            "in": "query",
+            "required": false,
+            "description": "Query only rooms with attendant working in them.",
+            "type": "boolean"
+          }
+        ],
+        "responses": {
+          "200": {
+            "schema": {
+              "$ref": "#/definitions/housekeepingBoard"
+            }
+          }
+        }
+      }
+    },
+    "/hotels/{hotelId}/houseKeepingtasks": {
+      "get": {
+        "operationId": "getHouseKeepingTasks",
+        "parameters": [
+          {
+            "name": "taskDate",
+            "in": "query",
+            "required": true,
+            "description": "Date for which the Task Assignment information is required.",
+            "type": "string",
+            "format": "date"
+          },
+          {
+            "name": "attendantInRoomOnly",
+            "in": "query",
+            "required": false,
+            "description": "Query only rooms with attendant working in them.",
+            "type": "boolean"
+          },
+          {
+            "name": "generateCleaningSequence",
+            "in": "query",
+            "required": false,
+            "description": "Setting this to true will generate a sequence based on the current condition of the room for cleaning. This sequence would be the same sequence with which the Task Companion works.",
+            "type": "boolean"
+          },
+          {
+            "name": "includeReservationInfo",
+            "in": "query",
+            "required": false,
+            "description": "Setting this to true will include reservation information associated to the room.",
+            "type": "boolean"
+          },
+          {
+            "name": "includeComponentRoomsInfo",
+            "in": "query",
+            "required": false,
+            "description": "Setting this to true will include component rooms information associated to the room.",
+            "type": "boolean"
+          },
+          {
+            "name": "includeTaskSheetDetails",
+            "in": "query",
+            "required": false,
+            "description": "This will include room details for the Task Sheets. If summary information is only required, then this could be set to false. If a Task Sheet Number is included in the Search and this flag is set to true, then the details for that particular Task Sheet will be returned. For all other task sheets, the IncludeTaskSheetsSummary will determine if Summary details are required or not.",
+            "type": "boolean"
+          },
+          {
+            "name": "includeScheduledRoomDetails",
+            "in": "query",
+            "required": false,
+            "description": "Set this to true to include reservation information associated with any scheduled room moves. Available when the Advanced Daily Details OPERA Control is active. Note: IncludeReservationInfo must also be set to true to fetch reservation details.",
+            "type": "boolean"
+          },
+          {
+            "name": "includeTaskSheetsSummary",
+            "in": "query",
+            "required": false,
+            "description": "Setting this to true, will return Summary information for the task sheets required. If a Task Sheet Number is included in the Search and IncludeTaskSheetDetails is set to false and IncludeTaskSheetsSummary is false, then only the Summary information for that particular task sheet will be returned. IncludeTaskSheetDetails = True, IncludeTaskSheetsSummary = True : includes all task sheets details and summary IncludeTaskSheetDetails = false, IncludeTaskSheetsSummary = True : includes only summary IncludeTaskSheetDetails = false, IncludeTaskSheetsSummary = false, Task Sheet No =null : no task sheet detail or summary for any of the tasksheets. Returns the Task Assignnment header. IncludeTaskSheetDetails = True, IncludeTaskSheetsSummary = True, Task Sheet No = XX : includes task sheets detail for XX and summary for others. IncludeTaskSheetDetails = false, IncludeTaskSheetsSummary = True, Task Sheet No = XX : includes summary for all including XX. IncludeTaskSheetDetails = false, IncludeTaskSheetsSummary = false, Task Sheet No = XX : includes summary for XX. No information for others.",
+            "type": "boolean"
+          },
+          {
+            "name": "sortByCleaningSequence",
+            "in": "query",
+            "required": false,
+            "description": "The rooms in the task sheet would be sorted with the cleaning sequence. The normal sort would be done based on the Default Sequence.",
+            "type": "boolean"
+          },
+          {
+            "name": "taskCodes",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "The Code for the task.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "taskHotelCodes",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Property for which the Task Assignment information is required.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "taskSequences",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Ordering sequence for display.",
+            "items": {
+              "type": "integer"
+            },
+            "required": false
+          },
+          {
+            "name": "taskDescriptions",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Description of the Task Code.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "taskInstructions",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Instructions for this Task Code.",
+            "items": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "facilityDepartureTask",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Indicates if this task code is the Departure Room Default Task to be scheduled on the departure date of the reservations. Defining a Departure Room Default Task is available when the 'Housekeeping Task Scheduling' OPERA Control is active.",
+            "items": {
+              "type": "boolean"
+            },
+            "required": false
+          },
+          {
+            "name": "linenChange",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Indicates if a linen change is necessary.",
+            "items": {
+              "type": "boolean"
+            },
+            "required": false
+          },
+          {
+            "name": "taskCodesBreakOutId",
+            "in": "query",
+            "required": false,
+            "description": "A unique identifying value assigned by the creating system. The ID attribute may be used to reference a primary-key value within a database or in a particular implementation.",
+            "type": "string"
+          },
+          {
+            "name": "taskCodesBreakOutIdContext",
+            "in": "query",
+            "required": false,
+            "description": "Used to identify the source of the identifier (e.g., IATA, ABTA).",
+            "type": "string"
+          },
+          {
+            "name": "taskCodesBreakOutIdType",
+            "in": "query",
+            "required": false,
+            "description": "A reference to the type of object defined by the UniqueID element.",
+            "type": "string"
+          },
+          {
+            "name": "attendantId",
+            "in": "query",
+            "required": false,
+            "description": "Attendant ID for which the Task Sheets are assigned.",
+            "type": "string"
+          },
+          {
+            "name": "taskSheetNumber",
+            "in": "query",
+            "type": "array",
+            "maxItems": 4000,
+            "collectionFormat": "multi",
+            "description": "Specific Task Sheet number for which the information is required.",
+            "items": {
+              "type": "integer"
+            },
+            "required": false
+          },
+          {
+            "name": "housekeepingRoomStatus",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for room status instructions to be used in requests for fetching housekeeping rooms. Valid status values are Clean, Dirty, Pickup, Inspected, OutOfOrder, OutOfService.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Clean",
+                "Dirty",
+                "Pickup",
+                "Inspected",
+                "OutOfOrder",
+                "OutOfService"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "guestService",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Possible values for the Guest Service Status.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "DoNotDisturb",
+                "MakeUpRoom",
+                "NoStatusSelected",
+                "ServiceDeclined"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "roomStatusToChange",
+            "in": "query",
+            "type": "array",
+            "collectionFormat": "multi",
+            "description": "Simple type for room status instructions to be used in requests for fetching housekeeping rooms. Valid status values are Clean, Dirty, Pickup, Inspected, OutOfOrder, OutOfService.",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "Clean",
+                "Dirty",
+                "Pickup",
+                "Inspected",
+                "OutOfOrder",
+                "OutOfService"
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "includeTaskSupplies",
+            "in": "query",
+            "required": false,
+            "description": "Setting this to true, will return task supplies information for the task sheets if Facility Management control is active. If IncludeReservationInfo is set to true supplies information will always be returned.",
+            "type": "boolean"
+          }
+        ],
+        "responses": {
+          "200": {
+            "schema": {
+              "$ref": "#/definitions/taskAssignment"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "housekeepingBoard": {
+      "type": "object",
+      "properties": {
+        "housekeepingRoomInfo": {
+          "description": "Collection of Housekeeping Rooms and their information as well as paging attributes.",
+          "type": "object",
+          "properties": {
+            "housekeepingRooms": {
+              "description": "List of rooms and the room status.",
+              "$ref": "#/definitions/hotelRoomsType"
+            },
+            "totalPages": {
+              "description": "Evaluated total page count based on the requested max fetch count.",
+              "type": "integer"
+            },
+            "offset": {
+              "description": "Index or initial index of the set(page) being requested. If the index goes out of the bounds of the total set count then no data will be returned.",
+              "type": "integer"
+            },
+            "limit": {
+              "description": "Indicates maximum number of records a Web Service should return.",
+              "type": "integer"
+            },
+            "hasMore": {
+              "description": "Indicates whether all the records are included in the response or not. Absence of the attribute values should be consider as all rows fetched in the response.",
+              "type": "boolean"
+            },
+            "totalResults": {
+              "description": "Total number of rows queried",
+              "type": "integer"
+            },
+            "count": {
+              "description": "Total number of rows returned",
+              "type": "integer"
+            }
+          }
+        },
+        "housekeepingRoomStatusInfoList": {
+          "description": "Collection of Housekeeping Room Status Information.",
+          "type": "array",
+          "maxItems": 4000,
+          "items": {
+            "$ref": "#/definitions/housekeepingRoomStatusInfo"
+          }
+        },
+        "links": {
+          "$ref": "#/definitions/links"
+        },
+        "warnings": {
+          "$ref": "#/definitions/warningsType"
+        }
+      }
+    },
+    "housekeepingTaskAssignmentType": {
+      "type": "object",
+      "description": "Contains information for all the Task Sheets generated for a particular combination of Date and Task Code.",
+      "properties": {
+        "taskCodes": {
+          "description": "The Task Code(s) for which the Task Sheets were generated.",
+          "type": "array",
+          "maxItems": 4000,
+          "items": {
+            "$ref": "#/definitions/housekeepingTaskCodeType"
+          }
+        },
+        "taskSheets": {
+          "description": "List of Task Sheets generated for this assignment.",
+          "type": "array",
+          "maxItems": 4000,
+          "items": {
+            "$ref": "#/definitions/housekeepingTaskType"
+          }
+        },
+        "hotelId": {
+          "description": "Property where the Task Assignment is done.",
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 20
+        },
+        "taskDate": {
+          "description": "The date for which the Task Assignment is done. Date should be the current business date in most cases. Date cannot be in the past.",
+          "type": "string",
+          "format": "date",
+          "maxLength": 8
+        },
+        "taskSheetsCount": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

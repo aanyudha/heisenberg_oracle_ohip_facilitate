@@ -35,6 +35,17 @@ export type HttpAudit = {
   classification: string;
 };
 export const APPROVED_OHIP_OPERATIONS = Object.freeze({
+  getHousekeepingOverview: Object.freeze({
+    method: "GET",
+    path: "/hsk/v1/hotels/{hotelId}/housekeepingOverview?limit=100&offset={offset}&fetchInstructions=ResvInfo",
+    semantics: "retrieve current housekeeping rooms only",
+  }),
+  getHouseKeepingTasks: Object.freeze({
+    method: "GET",
+    path: "/hsk/v1/hotels/{hotelId}/houseKeepingtasks?taskDate={date}&generateCleaningSequence=false&includeReservationInfo=false&includeTaskSheetDetails=true&includeTaskSheetsSummary=true",
+    semantics:
+      "retrieve existing task sheets; never generate cleaning sequence or task sheets",
+  }),
   searchHotelReservations: Object.freeze({
     method: "POST",
     path: "/rsv/v1/hotels/{hotelId}/reservations/searches",
@@ -173,7 +184,40 @@ export async function enforceOhipPolicy(
     )
       deny();
     const base = `/rsv/v1/hotels/${encodeURIComponent(scope.hotelId)}/reservations`;
-    if (operation === "getReservation") {
+    if (
+      operation === "getHousekeepingOverview" ||
+      operation === "getHouseKeepingTasks"
+    ) {
+      const [pathname, query] = path.split("?");
+      const params = new URLSearchParams(query);
+      if (path.split("?").length !== 2 || options.body !== undefined) deny();
+      if (operation === "getHousekeepingOverview") {
+        if (
+          pathname !==
+            `/hsk/v1/hotels/${encodeURIComponent(scope.hotelId)}/housekeepingOverview` ||
+          [...params.keys()].sort().join(",") !==
+            "fetchInstructions,limit,offset" ||
+          params.get("limit") !== "100" ||
+          params.get("fetchInstructions") !== "ResvInfo" ||
+          !/^(0|[1-9][0-9]{0,3})$/.test(params.get("offset") || "") ||
+          Number(params.get("offset")) > 9900
+        )
+          deny();
+      } else {
+        if (
+          pathname !==
+            `/hsk/v1/hotels/${encodeURIComponent(scope.hotelId)}/houseKeepingtasks` ||
+          [...params.keys()].sort().join(",") !==
+            "generateCleaningSequence,includeReservationInfo,includeTaskSheetDetails,includeTaskSheetsSummary,taskDate" ||
+          params.get("generateCleaningSequence") !== "false" ||
+          params.get("includeReservationInfo") !== "false" ||
+          params.get("includeTaskSheetDetails") !== "true" ||
+          params.get("includeTaskSheetsSummary") !== "true" ||
+          !z.iso.date().safeParse(params.get("taskDate")).success
+        )
+          deny();
+      }
+    } else if (operation === "getReservation") {
       const [pathname, query] = path.split("?");
       if (
         path.split("?").length !== 2 ||

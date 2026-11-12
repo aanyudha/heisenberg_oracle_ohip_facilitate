@@ -7,6 +7,67 @@ export const roles = [
   "it",
 ] as const;
 export type Role = (typeof roles)[number];
+export type WorksheetScope = {
+  propertyId: string;
+  date: string;
+  shiftId: string;
+};
+export type WorksheetRoom = {
+  id: string;
+  floor: string | null;
+  floorSource: "OHIP" | "local_validated" | "unavailable";
+  section: string | null;
+  roomType: string | null;
+  status: string;
+  departure: boolean;
+  stayover: boolean;
+  arrival: boolean;
+  vip: boolean;
+  dnd: boolean;
+  makeUpRoom: boolean;
+  outOfOrder: boolean;
+  outOfService: boolean;
+  priority: boolean;
+  tasks: string[];
+  remarks: string[];
+  credits: number | null;
+  creditSource: "OHIP" | "local" | "not_configured";
+  observedAt: string | null;
+};
+export type WorksheetStaff = {
+  id: string;
+  name: string;
+  available: boolean;
+  active: boolean;
+};
+export type WorksheetOperation =
+  | { type: "rooms"; roomIds: string[]; attendantId: string | null }
+  | { type: "team"; attendantId: string; supervisorId: string };
+export type Worksheet = {
+  scope: WorksheetScope;
+  property: { id: string; name: string };
+  shift: { id: string; name: string };
+  revision: string;
+  selfRole: string | null;
+  manager: boolean;
+  canManage: boolean;
+  rooms: WorksheetRoom[];
+  supervisors: WorksheetStaff[];
+  attendants: WorksheetStaff[];
+  team: Record<string, string>;
+  assignments: Record<string, string>;
+  localProgress: Record<string, string>;
+  feed: {
+    source: "OHIP" | "DEMO";
+    available: boolean;
+    status: string;
+    error: string | null;
+    taskError: string | null;
+    syncedAt: string | null;
+  };
+  missingAssignedRooms: number;
+  warnings: string[];
+};
 export type Property = {
   id: string;
   name: string;
@@ -14,6 +75,11 @@ export type Property = {
   timezone: string;
 };
 export type Identity = {
+  housekeepingRoles?: {
+    propertyId: string;
+    jobRole: string;
+    canManage: boolean;
+  }[];
   id: string;
   name: string;
   tenantId: string;
@@ -50,12 +116,14 @@ export type Task = {
   updated_at: string;
 };
 export type ChangeEvent = {
+  details?: { kind?: string; date?: string; shiftId?: string };
   seq: number;
   propertyId: string | null;
   topic:
     | "tasks"
     | "reservations"
     | "rooms"
+    | "housekeeping"
     | "integrations"
     | "branding"
     | "reconcile";

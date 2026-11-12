@@ -195,7 +195,19 @@ export function Shell({ user }: { user: Workspace["user"] }) {
               ["/operations/guests", "Guest Profiles", Users],
             ] as NavItem[])
           : []),
-        ["/operations/rooms", "Rooms & Housekeeping", DoorOpen],
+        [
+          "/operations/rooms",
+          user.role === "housekeeping" &&
+          user.housekeepingRoles?.find((r) => r.propertyId === propertyId)
+            ?.jobRole === "attendant"
+            ? "My Worksheet"
+            : user.role === "housekeeping" &&
+                user.housekeepingRoles?.find((r) => r.propertyId === propertyId)
+                  ?.jobRole === "supervisor"
+              ? "My Team"
+              : "Rooms & Housekeeping",
+          DoorOpen,
+        ],
         ["/operations/tasks", "Priority Tasks", ListChecks],
       ],
     },
@@ -394,7 +406,19 @@ export function Shell({ user }: { user: Workspace["user"] }) {
             <ErrorBoundary key={location.pathname}>
               <Suspense fallback={<Skeleton />}>
                 <Routes>
-                  <Route path="/" element={<Dashboard />} />
+                  <Route
+                    path="/"
+                    element={
+                      user.role === "housekeeping" &&
+                      user.housekeepingRoles?.some((r) =>
+                        ["attendant", "supervisor"].includes(r.jobRole),
+                      ) ? (
+                        <Navigate to="/operations/rooms" replace />
+                      ) : (
+                        <Dashboard />
+                      )
+                    }
+                  />
                   <Route path="/operations/:section" element={<Operations />} />
                   <Route path="/group/:section" element={<Group />} />
                   <Route

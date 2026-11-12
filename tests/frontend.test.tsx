@@ -283,6 +283,60 @@ describe("realtime browser protocol", () => {
     const realtime = useRealtime(user);
     return <span>{realtime.state}</span>;
   }
+  it("invalidates only the affected worksheet for an assignment event", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidated = vi.spyOn(client, "invalidateQueries");
+    wrap(<Harness />, client);
+    sockets[0].onopen?.();
+    invalidated.mockClear();
+    sockets[0].message({
+      seq: 13,
+      topic: "housekeeping",
+      propertyId: "demo-1",
+      details: { kind: "assignment", date: "2026-11-12", shiftId: "AM" },
+    });
+    await waitFor(() => expect(invalidated).toHaveBeenCalled());
+    const predicate = (invalidated.mock.calls[0][0] as any).predicate;
+    expect(
+      predicate({
+        queryKey: ["housekeeping", "demo-1", "2026-11-12", "AM", "worksheet"],
+      }),
+    ).toBe(true);
+    expect(predicate({ queryKey: ["housekeeping", "demo-1", "setup"] })).toBe(
+      false,
+    );
+    expect(
+      predicate({
+        queryKey: ["housekeeping", "demo-1", "2026-11-13", "AM", "worksheet"],
+      }),
+    ).toBe(false);
+    expect(predicate({ queryKey: ["overview", "demo-1"] })).toBe(false);
+  });
+  it.each(["housekeeping", "rooms", "reservations", "integrations"])(
+    "refreshes scoped Housekeeping views on %s events",
+    async (topic) => {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const invalidated = vi.spyOn(client, "invalidateQueries");
+      wrap(<Harness />, client);
+      sockets[0].onopen?.();
+      invalidated.mockClear();
+      sockets[0].message({ seq: 11, propertyId: "demo-1", topic });
+      await waitFor(() => expect(invalidated).toHaveBeenCalled());
+      const predicate = (invalidated.mock.calls[0][0] as any).predicate;
+      expect(
+        predicate({ queryKey: ["housekeeping", "demo-1", "2026-11-12", "AM"] }),
+      ).toBe(true);
+      expect(
+        predicate({
+          queryKey: ["housekeeping", "other-1", "2026-11-12", "AM"],
+        }),
+      ).toBe(false);
+    },
+  );
   it("targets invalidation, records sequence for reconnect, and reconciles on tab activation", async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -326,28 +380,91 @@ describe("strict monitoring-only operational UI", () => {
       const { Routes, Route } = await import("react-router-dom");
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () =>
-          Response.json({
-            items:
-              section === "tasks"
-                ? [
-                    {
-                      id: "task",
-                      title: "Historical task",
-                      priority: "normal",
-                      status: "open",
-                      assignee: null,
-                    },
-                  ]
-                : [
+        vi.fn(async (url) =>
+          String(url).includes("/local-housekeeping/setup")
+            ? Response.json({
+                selfRole: null,
+                manager: true,
+                shifts: [
+                  {
+                    id: "AM",
+                    name: "Morning",
+                    starts_at: "07:00",
+                    ends_at: "15:00",
+                  },
+                ],
+              })
+            : String(url).includes("/local-housekeeping/worksheet")
+              ? Response.json({
+                  scope: {
+                    propertyId: "demo-1",
+                    date: "2026-10-28",
+                    shiftId: "AM",
+                  },
+                  property: { id: "demo-1", name: "Demo Hotel" },
+                  shift: { id: "AM", name: "Morning" },
+                  revision: "1",
+                  manager: true,
+                  canManage: false,
+                  selfRole: null,
+                  supervisors: [],
+                  attendants: [],
+                  team: {},
+                  assignments: {},
+                  localProgress: {},
+                  warnings: [],
+                  missingAssignedRooms: 0,
+                  feed: {
+                    source: "OHIP",
+                    available: true,
+                    status: "synced",
+                    syncedAt: null,
+                    error: null,
+                    taskError: null,
+                  },
+                  rooms: [
                     {
                       id: "101",
-                      status: "dirty",
-                      attention: "Inspection pending",
+                      floor: null,
+                      roomType: null,
+                      status: "Dirty",
+                      departure: false,
+                      stayover: false,
+                      arrival: false,
+                      vip: false,
+                      dnd: false,
+                      makeUpRoom: false,
+                      priority: false,
+                      outOfOrder: false,
+                      outOfService: false,
+                      tasks: [],
+                      remarks: ["Inspection pending"],
+                      credits: null,
+                      creditSource: "not_configured",
                     },
                   ],
-            total: 1,
-          }),
+                })
+              : Response.json({
+                  items:
+                    section === "tasks"
+                      ? [
+                          {
+                            id: "task",
+                            title: "Historical task",
+                            priority: "normal",
+                            status: "open",
+                            assignee: null,
+                          },
+                        ]
+                      : [
+                          {
+                            id: "101",
+                            status: "dirty",
+                            attention: "Inspection pending",
+                          },
+                        ],
+                  total: 1,
+                }),
         ),
       );
       render(

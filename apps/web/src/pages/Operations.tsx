@@ -4,6 +4,8 @@ import { Search } from "lucide-react";
 import type { Reservation, Task } from "@hospitality/contracts";
 import { canGuests } from "@hospitality/contracts";
 import { useWorkspace } from "../workspace";
+import Housekeeping from "./Housekeeping";
+import HousekeepingWorksheet from "./HousekeepingWorksheet";
 import { useData, time } from "../api";
 import {
   Badge,
@@ -86,7 +88,7 @@ export default function Operations() {
     [arrival, setArrival] = useState(""),
     [page, setPage] = useState(1),
     [selected, setSelected] = useState("");
-  const isRooms = section === "rooms",
+  const isRooms = section === "rooms" || section === "rooms-settings",
     isTasks = section === "tasks",
     isReservations = !isRooms && !isTasks;
   const view =
@@ -125,7 +127,7 @@ export default function Operations() {
   const rooms = useData<{ items: any[]; total: number }>(
     ["rooms", propertyId, page],
     `/rooms?propertyId=${propertyId}&page=${page}`,
-    !!propertyId && isRooms,
+    !!propertyId && section === "rooms" && user.role === "front_office",
   );
   const assignees = useData<{ items: { id: string; name: string }[] }>(
     ["assignees", propertyId],
@@ -140,7 +142,7 @@ export default function Operations() {
   const title =
     (
       {
-        rooms: "Rooms & Housekeeping (View)",
+        rooms: "Rooms & Housekeeping",
         inhouse: "In-House Guests",
         tasks: "Priority Tasks",
         arrivals: "Today's Arrivals",
@@ -150,6 +152,19 @@ export default function Operations() {
       } as any
     )[section || ""] || "Reservations";
   if (!propertyId) return <Empty text="No property assigned." />;
+  if (section === "rooms-settings")
+    return (
+      <>
+        <Heading
+          eyebrow="HOUSEKEEPING ADMINISTRATION"
+          title="Housekeeping configuration"
+          description="Property staff roles, local shifts and validated room directory. Daily assignments are managed from the worksheet."
+        />
+        <Housekeeping key={propertyId} />
+      </>
+    );
+  if (isRooms && user.role !== "front_office")
+    return <HousekeepingWorksheet key={propertyId} />;
   if (isReservations && !canGuests(user.role))
     return <Empty text="Your role does not include guest record access." />;
   return (
@@ -265,12 +280,14 @@ export default function Operations() {
           </section>
         </>
       )}
-      {isRooms && (
+      {isRooms && user.role === "front_office" && (
         <section className="panel">
           <div className="panel-heading">
             <div>
               <h2>Room readiness</h2>
-              <p>Local housekeeping state · Updates are audited</p>
+              <p>
+                Cached room snapshot · Assignment progress is tracked separately
+              </p>
             </div>
           </div>
           <State query={rooms}>

@@ -1,4 +1,5 @@
 import { registerLocalManagement } from "./local-management.js";
+import { registerHousekeeping } from "./housekeeping.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import helmet from "@fastify/helmet";
@@ -301,6 +302,9 @@ export async function buildApp(
       id: u.id,
       tenantId: u.tenantId,
       role: u.role,
+      housekeepingRoles: await db.query(
+        sql`SELECT property_id AS "propertyId",job_role AS "jobRole",can_manage AS "canManage" FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND user_id=${u.id} AND property_id IN (${scope(u)})`,
+      ),
       developer: u.developer,
       csrf: u.csrf,
       name: user.name,
@@ -515,6 +519,18 @@ export async function buildApp(
     const u = req.principal,
       q = pagination.extend({ propertyId: id }).parse(req.query),
       p = property(u, q.propertyId);
+    if (
+      u.role === "housekeeping" &&
+      (
+        await db.query(
+          sql`SELECT 1 FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND property_id=${p} AND user_id=${u.id} AND job_role IN ('supervisor','attendant')`,
+        )
+      ).length
+    )
+      throw fail(
+        403,
+        "Use the date and shift scoped Housekeeping board for your room list",
+      );
     return {
       items: await db.query(
         sql`SELECT * FROM rooms WHERE tenant_id=${u.tenantId} AND property_id=${p} ORDER BY id LIMIT ${q.limit} OFFSET ${(q.page - 1) * q.limit}`,
@@ -545,6 +561,18 @@ export async function buildApp(
         .parse(req.body),
       p = property(u, b.propertyId),
       rid = id.parse((req.params as any).id);
+    if (
+      u.role === "housekeeping" &&
+      (
+        await db.query(
+          sql`SELECT 1 FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND property_id=${p} AND user_id=${u.id}`,
+        )
+      ).length
+    )
+      throw fail(
+        403,
+        "Use local Housekeeping assignment progress; room snapshots are read-only",
+      );
     await localDemoOnly(u, p);
     await db.orm.transaction(async (tx) => {
       const result = await tx.execute(
@@ -658,6 +686,7 @@ export async function buildApp(
     return { ok: true };
   });
   registerLocalManagement(app, db);
+  registerHousekeeping(app, db, options.ohipTransport);
   app.get("/api/admin", async (req) => {
     const u = req.principal;
     requireRole(canAdmin(u.role));

@@ -42,12 +42,29 @@ export function useRealtime(user: Identity) {
           void client.invalidateQueries({ queryKey: ["me"] });
           return;
         }
+        if (
+          event.topic === "housekeeping" &&
+          event.details?.kind === "assignment"
+        ) {
+          void client.invalidateQueries({
+            predicate: (q) =>
+              q.queryKey[0] === "housekeeping" &&
+              q.queryKey.includes(event.propertyId) &&
+              q.queryKey.includes(event.details.date) &&
+              q.queryKey.includes(event.details.shiftId),
+          });
+          return;
+        }
         void client.invalidateQueries({
           predicate: (q) =>
             q.queryKey[0] === "overview" ||
             q.queryKey[0] === "admin" ||
             (q.queryKey.includes(event.propertyId) &&
               (q.queryKey[0] === event.topic ||
+                (q.queryKey[0] === "housekeeping" &&
+                  ["rooms", "reservations", "integrations"].includes(
+                    event.topic,
+                  )) ||
                 [
                   "integrations",
                   "connections",

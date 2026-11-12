@@ -18,6 +18,7 @@
     "start": "node dist/server/index.js",
     "demo": "node scripts/demo.mjs",
     "test:browser": "node scripts/browser-smoke.mjs",
+    "test:housekeeping-smoke": "tsx scripts/housekeeping-smoke.ts",
     "test:deployment": "node scripts/deployment-validation.mjs"
   },
   "dependencies": {
