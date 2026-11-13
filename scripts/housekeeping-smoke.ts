@@ -6,7 +6,19 @@ import { housekeepingFixture } from "../tests/housekeeping-fixture";
 import { sql } from "../apps/api/src/db";
 import { appendEvent } from "../apps/api/src/realtime";
 const f = await housekeepingFixture(true);
+await f.plan();
 const began = Date.now();
+let lastBrowserPhase = began;
+async function nextRequestWindow() {
+  const remaining = 65000 - (Date.now() - lastBrowserPhase);
+  if (remaining > 0) {
+    console.log(
+      "Waiting for the unchanged request-limit window before next browser phase",
+    );
+    await new Promise((r) => setTimeout(r, Math.min(remaining, 55000)));
+  }
+  lastBrowserPhase = Date.now();
+}
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined,
   page: Page | undefined;
 const errors: string[] = [],
@@ -208,6 +220,7 @@ try {
     "Supervisor drags a room to a registered attendant with atomic team/room autosave and no manual floor selection",
   );
   await earlyContext.close();
+  await nextRequestWindow();
   await page.bringToFront();
   await page.getByLabel("Select room 202", { exact: true }).check();
   await page.getByLabel("Select room 203", { exact: true }).check();
@@ -462,6 +475,14 @@ try {
     };
   });
   await preview.getByRole("button", { name: "Print / Save PDF" }).click();
+  await until(
+    async () =>
+      (await page!.evaluate(
+        () =>
+          (window as unknown as { printInvocations: number }).printInvocations,
+      )) === 1,
+    "Saved print verification did not invoke the print dialog",
+  );
   check(
     (await page.evaluate(
       () =>
@@ -490,13 +511,7 @@ try {
   });
   // Browser actors share one loopback IP. Keep production rate limiting intact
   // and start mobile acceptance in the next window after desktop activity.
-  const remaining = 65000 - (Date.now() - began);
-  if (remaining > 0) {
-    console.log(
-      "Waiting for the unchanged API rate-limit window before mobile actors",
-    );
-    await new Promise((r) => setTimeout(r, Math.min(remaining, 55000)));
-  }
+  await nextRequestWindow();
   const own = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });

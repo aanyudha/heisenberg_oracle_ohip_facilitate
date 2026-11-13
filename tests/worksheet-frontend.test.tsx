@@ -136,6 +136,110 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+describe("operational selection and print refinement", () => {
+  it("retains hidden selection through combined filters and requires explicit all-matching confirmation", async () => {
+    mount();
+    await ready();
+    fireEvent.click(screen.getByLabelText("Select room 201"));
+    fireEvent.change(screen.getByLabelText("Filter floor"), {
+      target: { value: "East" },
+    });
+    expect(
+      document.querySelector(".worksheet-selection-summary"),
+    ).toHaveTextContent("1 selected rooms (1 outside visible results)");
+    fireEvent.change(screen.getByLabelText("Search room number"), {
+      target: { value: "202" },
+    });
+    fireEvent.change(screen.getByLabelText("Filter Assignment"), {
+      target: { value: "Unassigned" },
+    });
+    expect(
+      screen.getByRole("article", { name: "Room 202" }),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Select all 1 matching rooms" }),
+    );
+    expect(
+      screen.getByLabelText("Confirm matching selection"),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm select all matching" }),
+    );
+    expect(
+      document.querySelector(".worksheet-selection-summary"),
+    ).toHaveTextContent("2 selected rooms");
+    expect(writes).toHaveLength(0);
+  });
+  it("previews deterministic many-to-many distribution and saves one undoable operation", async () => {
+    value.rooms[0].credits = null;
+    mount();
+    await ready();
+    fireEvent.click(screen.getByLabelText("Select room 201"));
+    fireEvent.click(screen.getByLabelText("Select room 202"), {
+      shiftKey: true,
+    });
+    fireEvent.click(screen.getByText("Distribute to multiple attendants"));
+    const bulk = document.querySelector(".worksheet-distribute") as HTMLElement;
+    fireEvent.click(
+      within(bulk).getByRole("checkbox", { name: "Attendant One" }),
+    );
+    fireEvent.click(
+      within(bulk).getByRole("checkbox", { name: "Attendant Two" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Preview distribution" }),
+    );
+    expect(screen.getByLabelText("Distribution preview")).toHaveTextContent(
+      "Credits incomplete: using Equal Rooms",
+    );
+    expect(writes).toHaveLength(0);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm distribution" }),
+    );
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0].body.operations).toEqual([
+      {
+        type: "distribute",
+        roomIds: ["201", "202"],
+        attendantIds: ["a1", "a2"],
+        mode: "credits",
+      },
+    ]);
+    await waitFor(() =>
+      expect(
+        document.querySelector(".worksheet-selection-summary"),
+      ).toHaveTextContent("0 selected rooms"),
+    );
+  });
+  it("refreshes canonical saved print and scopes selected attendant pages independently of filters", async () => {
+    value.assignments = { "201": "a1", "202": "a2" };
+    mount();
+    await ready();
+    fireEvent.change(screen.getByLabelText("Filter floor"), {
+      target: { value: "East" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Print Worksheet" }),
+    );
+    const preview = await screen.findByRole("dialog", {
+      name: "Worksheet print preview",
+    });
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/worksheet/print?"),
+      expect.anything(),
+    );
+    fireEvent.change(screen.getByLabelText("Worksheet print mode"), {
+      target: { value: "attendant" },
+    });
+    fireEvent.change(screen.getByLabelText("Print scope"), {
+      target: { value: "a1" },
+    });
+    expect(preview.querySelectorAll(".worksheet-print-page")).toHaveLength(1);
+    expect(preview.querySelector("tbody")).toHaveTextContent("201");
+    expect(preview.querySelector("tbody")).not.toHaveTextContent("202");
+    expect(preview).toHaveTextContent("Generated at:");
+  });
+});
 function mount(identity = user) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },

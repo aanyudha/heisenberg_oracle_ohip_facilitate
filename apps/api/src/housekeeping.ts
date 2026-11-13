@@ -154,12 +154,12 @@ export function registerHousekeeping(
     const a = await access(db.orm, u, p);
     return {
       manager: a.manager,
-      canConfigureStaff: privileged(u),
+      canConfigureStaff: false,
       canManage:
         a.manager || (a.self?.job_role === "supervisor" && a.self.can_manage),
       selfRole: a.self?.job_role || null,
       shifts: await db.query(
-        sql`SELECT id,name,starts_at,ends_at FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${p} ORDER BY starts_at`,
+        sql`SELECT id,name,starts_at,ends_at,active FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${p} ORDER BY starts_at`,
       ),
       staff: a.manager ? a.staff : a.staff.filter((r) => r.user_id === u.id),
       directory: a.manager ? await directory(db.orm, u, p) : [],
@@ -176,56 +176,12 @@ export function registerHousekeeping(
     };
   });
   app.put("/api/local-housekeeping/staff", async (req) => {
-    const b = z
-      .object({
-        propertyId: id,
-        userId: id,
-        jobRole: z.enum(["manager", "supervisor", "attendant"]),
-        canManage: z.boolean().default(false),
-        department: z.literal("Housekeeping"),
-      })
-      .strict()
-      .parse(req.body);
-    const u = req.principal;
-    return locked(u, b.propertyId, async (tx) => {
-      // Only existing administrative RBAC may grant HK authority.
-      if (!privileged(u))
-        throw fail(403, "Administrative staff configuration required");
-      if (
-        !(
-          await tx.execute(
-            sql`SELECT 1 FROM memberships m JOIN property_grants g ON g.tenant_id=m.tenant_id AND g.user_id=m.user_id WHERE m.tenant_id=${u.tenantId} AND m.user_id=${b.userId} AND g.property_id=${b.propertyId} AND m.role IN ('housekeeping','hotel_manager') AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND a.kind='users' AND a.target=m.user_id)`,
-          )
-        ).rows.length
-      )
-        throw fail(
-          400,
-          "Active registered staff and property membership required",
-        );
-      const existing = (
-        await tx.execute(
-          sql`SELECT job_role FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND property_id=${b.propertyId} AND user_id=${b.userId}`,
-        )
-      ).rows[0] as Row | undefined;
-      if (
-        existing &&
-        existing.job_role !== b.jobRole &&
-        (
-          await tx.execute(
-            sql`SELECT 1 FROM housekeeping_staff_schedules WHERE tenant_id=${u.tenantId} AND property_id=${b.propertyId} AND user_id=${b.userId} AND available`,
-          )
-        ).rows.length
-      )
-        throw fail(
-          409,
-          "Make staff schedules unavailable and release assignments before changing their role",
-        );
-      await tx.execute(
-        sql`INSERT INTO housekeeping_staff_profiles(tenant_id,property_id,user_id,department,job_role,can_manage) VALUES (${u.tenantId},${b.propertyId},${b.userId},${b.department},${b.jobRole},${b.canManage}) ON CONFLICT(tenant_id,property_id,user_id) DO UPDATE SET job_role=excluded.job_role,can_manage=excluded.can_manage`,
-      );
-      await changed(tx, u, b.propertyId, "staff", b.userId);
-      return { ok: true };
-    });
+    if (!privileged(req.principal))
+      throw fail(403, "User Management authorization required");
+    throw fail(
+      410,
+      "Housekeeping roles are managed only in Administration -> Users & Roles",
+    );
   });
   app.put("/api/local-housekeeping/shifts", async (req) => {
     const b = z
@@ -241,6 +197,7 @@ export function registerHousekeeping(
           .string()
           .regex(/^\d{2}:\d{2}$/)
           .refine((v) => Number(v.slice(0, 2)) < 24 && Number(v.slice(3)) < 60),
+        active: z.boolean().default(true),
       })
       .strict()
       .parse(req.body);
@@ -249,9 +206,93 @@ export function registerHousekeeping(
       if (!(await access(tx, u, b.propertyId)).manager)
         throw fail(403, "Manager required");
       await tx.execute(
-        sql`INSERT INTO housekeeping_shifts VALUES (${u.tenantId},${b.propertyId},${b.id},${b.name},${b.startsAt},${b.endsAt}) ON CONFLICT(tenant_id,property_id,id) DO UPDATE SET name=excluded.name,starts_at=excluded.starts_at,ends_at=excluded.ends_at`,
+        sql`INSERT INTO housekeeping_shifts(tenant_id,property_id,id,name,starts_at,ends_at,active) VALUES (${u.tenantId},${b.propertyId},${b.id},${b.name},${b.startsAt},${b.endsAt},${b.active}) ON CONFLICT(tenant_id,property_id,id) DO UPDATE SET name=excluded.name,starts_at=excluded.starts_at,ends_at=excluded.ends_at,active=excluded.active`,
       );
       await changed(tx, u, b.propertyId, "shift", b.id);
+      return { ok: true };
+    });
+  });
+  app.get("/api/local-housekeeping/roster", async (req) => {
+    const s = scopeSchema.parse(req.query),
+      u = req.principal;
+    return locked(u, s.propertyId, async (tx) => {
+      const a = await access(tx, u, s.propertyId);
+      if (!a.manager) throw fail(403, "Manager required");
+      const schedules = (
+        await tx.execute(
+          sql`SELECT user_id,available FROM housekeeping_staff_schedules WHERE ${where(u, s)}`,
+        )
+      ).rows;
+      return {
+        staff: a.staff.map((r) => ({
+          id: r.user_id,
+          name: r.name,
+          role: r.job_role,
+          available: schedules.some(
+            (t) => t.user_id === r.user_id && t.available,
+          ),
+        })),
+      };
+    });
+  });
+  app.put("/api/local-housekeeping/roster", async (req) => {
+    const b = scopeSchema
+        .extend({
+          userIds: z
+            .array(id)
+            .max(1000)
+            .refine((v) => new Set(v).size === v.length),
+        })
+        .strict()
+        .parse(req.body),
+      u = req.principal;
+    return locked(u, b.propertyId, async (tx) => {
+      const a = await access(tx, u, b.propertyId);
+      if (!a.manager) throw fail(403, "Manager required");
+      if (b.userIds.some((uid) => !a.staff.some((r) => r.user_id === uid)))
+        throw fail(
+          400,
+          "Select active registered staff with authorized property membership",
+        );
+      if (
+        !(
+          await tx.execute(
+            sql`SELECT 1 FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${b.propertyId} AND id=${b.shiftId} AND active`,
+          )
+        ).rows.length
+      )
+        throw fail(409, "Select an active shift");
+      const old = (
+        await tx.execute(
+          sql`SELECT user_id FROM housekeeping_staff_schedules WHERE ${where(u, b)} AND available`,
+        )
+      ).rows;
+      for (const r of old.filter(
+        (r) => !b.userIds.includes(String(r.user_id)),
+      )) {
+        if (
+          (
+            await tx.execute(
+              sql`SELECT 1 FROM housekeeping_room_assignments WHERE ${where(u, b)} AND attendant_id=${r.user_id} AND active UNION ALL SELECT 1 FROM housekeeping_supervisor_assignments WHERE ${where(u, b)} AND supervisor_id=${r.user_id} AND (floors!='[]'::jsonb OR rooms!='[]'::jsonb OR coverage!='[]'::jsonb)`,
+            )
+          ).rows.length
+        )
+          throw fail(
+            409,
+            `Staff ${a.staff.find((s) => s.user_id === r.user_id)?.name || r.user_id} still has rooms or supervisor coverage. Reassign/release that work explicitly before removing this staff member.`,
+          );
+      }
+      await tx.execute(
+        sql`UPDATE housekeeping_staff_schedules SET available=false WHERE ${where(u, b)}`,
+      );
+      for (const uid of b.userIds)
+        await tx.execute(
+          sql`INSERT INTO housekeeping_staff_schedules VALUES (${u.tenantId},${b.propertyId},${b.date},${b.shiftId},${uid},true) ON CONFLICT(tenant_id,property_id,business_date,shift_id,user_id) DO UPDATE SET available=true`,
+        );
+      await changed(tx, u, b.propertyId, "roster", b.shiftId, {
+        date: b.date,
+        shiftId: b.shiftId,
+      });
       return { ok: true };
     });
   });

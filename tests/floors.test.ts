@@ -7,6 +7,7 @@ let f: Awaited<ReturnType<typeof housekeepingFixture>>;
 const day = "2026-11-13";
 beforeAll(async () => {
   f = await housekeepingFixture();
+  for (const d of [13, 14, 15, 17]) await f.plan(`2026-11-${d}`);
 }, 60000);
 afterAll(async () => {
   await f?.close();
@@ -48,7 +49,7 @@ const floor = (
   replace = false,
 ): WorksheetOperation => ({ type: "floors", floorIds, supervisorId, replace });
 describe("Floor → Supervisor → Attendant", () => {
-  it("reuses migration 0004/0005 tables and assigns several primary floors without daily setup", async () => {
+  it("reuses migration 0004/0005 tables and assigns several primary floors with a saved shift roster", async () => {
     await ok([floor(["West", "East"], f.s1.id), floor(["Annex"], f.s2.id)]);
     const manager = await sheet();
     expect(manager.supervisorFloors[f.s1.id]).toEqual(["East", "West"]);
@@ -66,7 +67,7 @@ describe("Floor → Supervisor → Attendant", () => {
           sql`SELECT version FROM schema_migrations ORDER BY version`,
         )
       ).map((r) => r.version),
-    ).toEqual(["0001", "0002", "0003", "0004", "0005"]);
+    ).toEqual(["0001", "0002", "0003", "0004", "0005", "0006"]);
     expect(
       (
         await f.db.query(

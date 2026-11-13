@@ -4,6 +4,7 @@ import type {
   WorksheetRoom,
 } from "@hospitality/contracts";
 import {
+  distributeRooms,
   resolveWorksheetCoverage,
   worksheetFloorRows,
   type SupervisorCoverage,
@@ -34,7 +35,19 @@ export function moveWorksheet(
       )
       .map((r) => r.id),
   }));
-  if (operation.type === "team")
+  if (operation.type === "distribute") {
+    const distribution = distributeRooms(
+      sheet,
+      operation.roomIds,
+      operation.attendantIds,
+      operation.mode,
+    );
+    for (const row of distribution.rows) {
+      if (!team[row.attendantId] && sheet.selfRole === "supervisor")
+        team[row.attendantId] = sheet.supervisors[0]?.id;
+      for (const id of row.roomIds) assignments[id] = row.attendantId;
+    }
+  } else if (operation.type === "team")
     team[operation.attendantId] = operation.supervisorId;
   else if (operation.type === "floors") {
     for (const s of supervisors) {

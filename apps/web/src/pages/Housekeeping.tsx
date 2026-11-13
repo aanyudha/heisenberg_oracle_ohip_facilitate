@@ -389,50 +389,7 @@ export default function Housekeeping() {
           <details className="panel">
             <summary>Housekeeping setup</summary>
             <div className="hk-forms">
-              {setup.data.canConfigureStaff && (
-                <form
-                  onSubmit={form("staff", (f) => ({
-                    propertyId,
-                    userId: f.get("userId"),
-                    department: "Housekeeping",
-                    jobRole: f.get("jobRole"),
-                    canManage: f.get("canManage") === "on",
-                  }))}
-                >
-                  <h3>Registered staff directory</h3>
-                  <label>
-                    Registered user
-                    <select name="userId" required>
-                      {setup.data.registeredUsers.map((r: any) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name} ({r.role})
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Housekeeping role
-                    <select name="jobRole">
-                      <option value="supervisor">Supervisor</option>
-                      <option value="attendant">Room Attendant</option>
-                      <option value="manager">HK Manager</option>
-                    </select>
-                  </label>
-                  <label>
-                    <input type="checkbox" name="canManage" /> Authorize
-                    supervisor to manage local team assignments
-                  </label>
-                  <button disabled={busy}>Save staff role</button>
-                  <p>
-                    {staff
-                      .map(
-                        (s: any) =>
-                          `${s.name}: ${s.job_role}${s.can_manage ? " (authorized)" : ""}`,
-                      )
-                      .join(" · ") || "No HK staff configured"}
-                  </p>
-                </form>
-              )}
+              <p>Staff roles are managed in Administration → Users & Roles.</p>
               <form
                 onSubmit={form("shifts", (f) => ({
                   propertyId,

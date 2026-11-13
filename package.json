@@ -19,7 +19,8 @@
     "demo": "node scripts/demo.mjs",
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:housekeeping-smoke": "tsx scripts/housekeeping-smoke.ts",
-    "test:deployment": "node scripts/deployment-validation.mjs"
+    "test:deployment": "node scripts/deployment-validation.mjs",
+    "test:housekeeping-operational-smoke": "tsx scripts/housekeeping-operational-smoke.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.14",

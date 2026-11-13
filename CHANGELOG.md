@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased - Housekeeping operational refinement (2026-11-13)
+
+- Added HK job classification to existing User Management, reusing identity/property grants and Housekeeping metadata. Removed staff role editing from Housekeeping configuration and closed its legacy write API (410); classification and explicit property authorization edits now use User Management RBAC and a shared classification service.
+- Added inline property shift configuration and batch Manage Shift Staff. Explicit date/shift roster is required; removing staff with work/coverage returns a conflict. Additive migration 0006 adds shift active status without editing migrations 0004/0005.
+- Added combined room search/filtering, bounded visible cards, retained selections with visible/matching/hidden counts, confirmed all-matching selection and desktop range selection. Occupancy uses only documented OPERA front-office status, with unknown values left unknown.
+- Added deterministic Equal Rooms/Balanced Credits distribution, explicit missing-credit fallback, preview of existing/resulting workloads, one atomic distribution command and whole-batch undo, with current roster/scope/revision checks.
+- Added canonical saved print/reconciliation API, explicit selected/all supervisor/attendant scope, pre-print revision/snapshot checks and report footer provenance. Kept browser-only A4 print, repeating headers and signatures.
+- Added isolated 120-room / 3-supervisor / 12-attendant / 2-shift fixtures and API/frontend/browser/PDF regressions. Preserved OHIP read-only, historical assignments, Fastify WebSocket, SPA and deployment architecture. No owner database migration/restart or production push/deployment.
+
 ## Unreleased - Floor / Supervisor / Attendant worksheet (2026-11-13)
 
 - Extended the existing worksheet with single/bulk primary floor assignment, per-floor workload and visible room-specific exceptions. Supervisor replacement preserves active attendant work and local progress; undo restores responsibility safely.

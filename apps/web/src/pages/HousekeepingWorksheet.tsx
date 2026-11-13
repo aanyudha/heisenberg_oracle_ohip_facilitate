@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight,
@@ -16,18 +16,26 @@ import type {
   WorksheetOperation,
 } from "@hospitality/contracts";
 import { useWorkspace } from "../workspace";
-import { useData, time } from "../api";
+import { useData, time, api } from "../api";
 import { State, Empty, Badge } from "../components";
 import { useWorksheetAutosave } from "../useWorksheetAutosave";
 import { workload } from "../worksheet-model";
 import WorksheetPrint from "./WorksheetPrint";
 import FloorAssignment from "./FloorAssignment";
+import ShiftControls from "./ShiftControls";
+import BulkDistribution from "./BulkDistribution";
 import "./HousekeepingWorksheet.css";
 
 type Setup = {
   selfRole: string | null;
   manager: boolean;
-  shifts: { id: string; name: string; starts_at: string; ends_at: string }[];
+  shifts: {
+    id: string;
+    name: string;
+    starts_at: string;
+    ends_at: string;
+    active?: boolean;
+  }[];
 };
 export default function HousekeepingWorksheet() {
   const { propertyId, date } = useWorkspace();
@@ -36,9 +44,11 @@ export default function HousekeepingWorksheet() {
     ["housekeeping", propertyId, "setup"],
     `/local-housekeeping/setup?propertyId=${encodeURIComponent(propertyId)}`,
   );
-  const selected = setup.data?.shifts?.some((s) => s.id === shift)
+  const selected = setup.data?.shifts?.some(
+    (s) => s.id === shift && s.active !== false,
+  )
     ? shift
-    : setup.data?.shifts?.[0]?.id || "";
+    : setup.data?.shifts?.find((s) => s.active !== false)?.id || "";
   return (
     <div className="worksheet-root">
       <State query={setup}>
@@ -55,9 +65,12 @@ export default function HousekeepingWorksheet() {
             <h2>Housekeeping Worksheet</h2>
             <p>No local shift is configured for this property.</p>
             {setup.data?.manager && (
-              <Link to="/operations/rooms-settings">
-                Open Housekeeping configuration
-              </Link>
+              <ShiftControls
+                propertyId={propertyId}
+                date={date}
+                shiftId=""
+                shifts={setup.data?.shifts || []}
+              />
             )}
           </section>
         )}
@@ -87,7 +100,50 @@ function WorksheetBoard({
     [roomType, setRoomType] = useState(""),
     [target, setTarget] = useState(""),
     [exceptionTarget, setExceptionTarget] = useState(""),
-    [preview, setPreview] = useState(false);
+    [preview, setPreview] = useState<Worksheet | null>(null),
+    [printError, setPrintError] = useState(""),
+    [printing, setPrinting] = useState(false),
+    [search, setSearch] = useState(""),
+    [turnover, setTurnover] = useState(""),
+    [occupancy, setOccupancy] = useState(""),
+    [allocation, setAllocation] = useState(""),
+    [coverage, setCoverage] = useState(""),
+    [attendantFilter, setAttendantFilter] = useState(""),
+    [service, setService] = useState(""),
+    [limit, setLimit] = useState(60),
+    [confirmMatching, setConfirmMatching] = useState(false);
+  const selectionRevision = useRef<string | null>(null),
+    anchor = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      sheet &&
+      !pending &&
+      !saving &&
+      !error &&
+      selectionRevision.current !== null &&
+      sheet.revision !== selectionRevision.current
+    ) {
+      setSelected([]);
+      selectionRevision.current = null;
+    }
+  }, [sheet, pending, saving, error]);
+  async function openPrint() {
+    if (!sheet) return;
+    setPrinting(true);
+    setPrintError("");
+    try {
+      const saved = await api<Worksheet>(
+        "/local-housekeeping/worksheet/print?" +
+          new URLSearchParams({ ...sheet.scope, revision: sheet.revision }),
+      );
+      setPreview(saved);
+    } catch (e) {
+      setPrintError((e as Error).message);
+      await query.refetch();
+    } finally {
+      setPrinting(false);
+    }
+  }
   const [dragOver, setDragOver] = useState<string | null>(null);
   const eligible =
     sheet?.attendants.filter(
@@ -105,24 +161,73 @@ function WorksheetBoard({
     ) || [];
   const assigned = (uid: string) =>
     sheet?.rooms.filter((r) => sheet.assignments[r.id] === uid) || [];
-  const filtered = (r: WorksheetRoom) =>
-    (!floor || r.floor === floor) &&
-    (!roomType || r.roomType === roomType) &&
-    (!status ||
-      (["Departure", "Stayover", "Arrival", "VIP", "DND", "Priority"].includes(
+  const matching =
+    useMemo(
+      () =>
+        sheet?.rooms.filter(
+          (r: WorksheetRoom) =>
+            (!search || r.id.toLowerCase().includes(search.toLowerCase())) &&
+            (!turnover ||
+              (turnover === "Departure" ? r.departure : r.stayover)) &&
+            (!occupancy || r.occupancy === occupancy) &&
+            (!allocation ||
+              (allocation === "Assigned"
+                ? !!sheet.assignments[r.id]
+                : !sheet.assignments[r.id])) &&
+            (!coverage || sheet.roomSupervisors?.[r.id] === coverage) &&
+            (!attendantFilter || sheet.assignments[r.id] === attendantFilter) &&
+            (!service ||
+              (service === "DND"
+                ? r.dnd
+                : service === "MUR"
+                  ? r.makeUpRoom
+                  : service === "OOO"
+                    ? r.outOfOrder
+                    : service === "OOS"
+                      ? r.outOfService
+                      : r.priority)) &&
+            (!floor || r.floor === floor) &&
+            (!roomType || r.roomType === roomType) &&
+            (!status ||
+              ([
+                "Departure",
+                "Stayover",
+                "Arrival",
+                "VIP",
+                "DND",
+                "Priority",
+              ].includes(status)
+                ? (
+                    {
+                      Departure: r.departure,
+                      Stayover: r.stayover,
+                      Arrival: r.arrival,
+                      VIP: r.vip,
+                      DND: r.dnd,
+                      Priority: r.priority,
+                    } as Record<string, boolean>
+                  )[status]
+                : r.status === status)),
+        ),
+      [
+        sheet,
+        search,
+        turnover,
+        occupancy,
+        allocation,
+        coverage,
+        attendantFilter,
+        service,
+        floor,
+        roomType,
         status,
-      )
-        ? (
-            {
-              Departure: r.departure,
-              Stayover: r.stayover,
-              Arrival: r.arrival,
-              VIP: r.vip,
-              DND: r.dnd,
-              Priority: r.priority,
-            } as Record<string, boolean>
-          )[status]
-        : r.status === status));
+      ],
+    ) || [];
+  const visible = useMemo(
+    () => new Set(matching.slice(0, limit).map((r) => r.id)),
+    [matching, limit],
+  );
+  const filtered = (r: WorksheetRoom) => visible.has(r.id);
   const change = (op: WorksheetOperation) => {
     if (
       op.type === "rooms" &&
@@ -135,8 +240,9 @@ function WorksheetBoard({
         attendantId: op.attendantId,
         supervisorId: user.id,
       });
+    if (op.type === "rooms" || op.type === "distribute")
+      selectionRevision.current = sheet?.revision || null;
     move(op);
-    setSelected([]);
   };
   function roomDrop(event: React.DragEvent, attendantId: string | null) {
     event.preventDefault();
@@ -218,13 +324,33 @@ function WorksheetBoard({
               type="checkbox"
               aria-label={`Select room ${r.id}`}
               checked={selected.includes(r.id)}
-              onChange={(e) =>
-                setSelected((ids) =>
-                  e.target.checked
-                    ? [...ids, r.id]
-                    : ids.filter((id) => id !== r.id),
-                )
-              }
+              onChange={() => {}}
+              onClick={(e) => {
+                const ordered = matching
+                  .filter((r) => visible.has(r.id))
+                  .map((r) => r.id);
+                if (
+                  e.shiftKey &&
+                  anchor.current &&
+                  ordered.includes(anchor.current)
+                ) {
+                  const a = ordered.indexOf(anchor.current),
+                    b = ordered.indexOf(r.id);
+                  setSelected((ids) => [
+                    ...new Set([
+                      ...ids,
+                      ...ordered.slice(Math.min(a, b), Math.max(a, b) + 1),
+                    ]),
+                  ]);
+                } else {
+                  setSelected((ids) =>
+                    ids.includes(r.id)
+                      ? ids.filter((id) => id !== r.id)
+                      : [...ids, r.id],
+                  );
+                }
+                anchor.current = r.id;
+              }}
             />
           )}
           <strong>{r.id}</strong>
@@ -441,14 +567,44 @@ function WorksheetBoard({
               )}
               <button
                 className="primary"
-                disabled={pending || saving || !sheet.feed.available}
-                onClick={() => setPreview(true)}
+                disabled={
+                  pending || saving || printing || !sheet.feed.available
+                }
+                onClick={() => void openPrint()}
               >
                 <Printer size={16} /> Print Worksheet
               </button>
             </div>
           </header>
+          {sheet.manager && (
+            <ShiftControls
+              propertyId={propertyId}
+              date={date}
+              shiftId={shiftId}
+              shifts={shifts}
+              disabled={pending || saving}
+            />
+          )}
+          {!sheet.rosterConfigured && (
+            <p className="worksheet-warning">
+              No staff roster for this business date and shift.{" "}
+              {sheet.manager
+                ? "Use Manage Shift Staff to select staff on duty."
+                : "Ask your manager to schedule staff before assigning rooms."}
+            </p>
+          )}
+          {printError && <p role="alert">{printError}</p>}
+          {(pending || saving) && (
+            <p>Print is unavailable until local changes finish saving.</p>
+          )}
           <div className="worksheet-context">
+            <span>
+              Property business date
+              <strong>
+                {date} ·{" "}
+                {user.properties.find((p) => p.id === propertyId)?.timezone}
+              </strong>
+            </span>
             <label>
               Shift
               <select
@@ -457,11 +613,14 @@ function WorksheetBoard({
                 disabled={pending || saving}
                 onChange={(e) => setShift(e.target.value)}
               >
-                {shifts.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {s.starts_at.slice(0, 5)}–{s.ends_at.slice(0, 5)}
-                  </option>
-                ))}
+                {shifts
+                  .filter((s) => s.active !== false)
+                  .map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} · {s.starts_at.slice(0, 5)}–
+                      {s.ends_at.slice(0, 5)}
+                    </option>
+                  ))}
               </select>
             </label>
             <span>
@@ -578,7 +737,136 @@ function WorksheetBoard({
                   </>
                 )}
               </div>
+              <div className="worksheet-selection-summary" role="status">
+                {matching.length} matching rooms ?{" "}
+                {Math.min(limit, matching.length)} visible rooms ?{" "}
+                {selected.length} selected rooms (
+                {selected.filter((id) => !visible.has(id)).length} outside
+                visible results)
+                {sheet.canManage && (
+                  <>
+                    <button onClick={() => setConfirmMatching(true)}>
+                      Select all {matching.length} matching rooms
+                    </button>
+                    <button onClick={() => setSelected([])}>
+                      Clear selection
+                    </button>
+                  </>
+                )}
+                {matching.length > limit && (
+                  <button onClick={() => setLimit(limit + 60)}>
+                    Show 60 more rooms
+                  </button>
+                )}
+              </div>
+              {confirmMatching && (
+                <section aria-label="Confirm matching selection">
+                  <p>
+                    Add all {matching.length} matching rooms, including{" "}
+                    {Math.max(0, matching.length - limit)} rooms beyond visible
+                    cards?
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSelected((ids) => [
+                        ...new Set([...ids, ...matching.map((r) => r.id)]),
+                      ]);
+                      setConfirmMatching(false);
+                    }}
+                  >
+                    Confirm select all matching
+                  </button>
+                  <button onClick={() => setConfirmMatching(false)}>
+                    Cancel
+                  </button>
+                </section>
+              )}
               <div className="worksheet-toolbar">
+                <label>
+                  Room number search
+                  <input
+                    aria-label="Search room number"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </label>
+                {[
+                  {
+                    label: "Departure / Stayover",
+                    value: turnover,
+                    set: setTurnover,
+                    options: ["Departure", "Stayover"],
+                  },
+                  {
+                    label: "Occupancy",
+                    value: occupancy,
+                    set: setOccupancy,
+                    options: sheet.rooms.some((r) => r.occupancy)
+                      ? ["Occupied", "Vacant"]
+                      : [],
+                    unavailable: !sheet.rooms.some((r) => r.occupancy),
+                  },
+                  {
+                    label: "Assignment",
+                    value: allocation,
+                    set: setAllocation,
+                    options: ["Assigned", "Unassigned"],
+                  },
+                  {
+                    label: "Service / Priority",
+                    value: service,
+                    set: setService,
+                    options: ["Priority", "DND", "MUR", "OOO", "OOS"],
+                  },
+                ].map((f) => (
+                  <label key={f.label}>
+                    {f.label}
+                    <select
+                      aria-label={"Filter " + f.label}
+                      disabled={f.unavailable}
+                      value={f.value}
+                      onChange={(e) => f.set(e.target.value)}
+                    >
+                      <option value="">
+                        {f.unavailable ? "Unavailable from room feed" : "All"}
+                      </option>
+                      {f.options.map((v) => (
+                        <option key={v}>{v}</option>
+                      ))}
+                    </select>
+                  </label>
+                ))}
+                <label>
+                  Supervisor coverage
+                  <select
+                    aria-label="Filter supervisor coverage"
+                    value={coverage}
+                    onChange={(e) => setCoverage(e.target.value)}
+                  >
+                    <option value="">All supervisors</option>
+                    {sheet.supervisors.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Attendant
+                  <select
+                    aria-label="Filter attendant"
+                    value={attendantFilter}
+                    onChange={(e) => setAttendantFilter(e.target.value)}
+                  >
+                    <option value="">All attendants</option>
+                    {sheet.attendants.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
                 <label>
                   Floor
                   <select
@@ -662,8 +950,15 @@ function WorksheetBoard({
                       onChange={(e) =>
                         setSelected(
                           e.target.checked
-                            ? sheet.rooms.filter(filtered).map((r) => r.id)
-                            : [],
+                            ? [
+                                ...new Set([
+                                  ...selected,
+                                  ...sheet.rooms
+                                    .filter(filtered)
+                                    .map((r) => r.id),
+                                ]),
+                              ]
+                            : selected.filter((id) => !visible.has(id)),
                         )
                       }
                     />
@@ -690,11 +985,20 @@ function WorksheetBoard({
                   <button
                     disabled={!target}
                     onClick={() =>
-                      change({
-                        type: "rooms",
-                        roomIds: selected,
-                        attendantId: target === "unassigned" ? null : target,
-                      })
+                      change(
+                        target === "unassigned"
+                          ? {
+                              type: "rooms",
+                              roomIds: selected,
+                              attendantId: null,
+                            }
+                          : {
+                              type: "distribute",
+                              roomIds: selected,
+                              attendantIds: [target],
+                              mode: "equal",
+                            },
+                      )
                     }
                   >
                     Assign selected <ArrowRight size={16} />
@@ -702,6 +1006,13 @@ function WorksheetBoard({
                   <button onClick={() => setSelected([])}>
                     Clear selection
                   </button>
+                  <BulkDistribution
+                    sheet={sheet}
+                    selected={selected}
+                    eligible={eligible}
+                    move={change}
+                    disabled={pending || saving}
+                  />
                   {sheet.manager && (
                     <details className="worksheet-exception-tools">
                       <summary>Room-specific supervisor exception</summary>
@@ -881,7 +1192,7 @@ function WorksheetBoard({
             </p>
           )}
           {preview && (
-            <WorksheetPrint sheet={sheet} onClose={() => setPreview(false)} />
+            <WorksheetPrint sheet={preview} onClose={() => setPreview(null)} />
           )}
         </>
       )}

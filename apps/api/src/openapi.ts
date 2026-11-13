@@ -10,6 +10,15 @@ const object = (
 ) => ({ type: "object", properties, required, additionalProperties: false });
 const query = object({ propertyId, page, limit });
 const bodies: Record<string, unknown> = {
+  "PATCH /api/admin/users/:id/housekeeping": object(
+    {
+      propertyId,
+      jobRole: { enum: ["manager", "supervisor", "attendant"] },
+      department: { const: "Housekeeping" },
+      canManage: { type: "boolean" },
+    },
+    ["propertyId", "jobRole"],
+  ),
   "POST /api/switch-tenant": object({ tenantId: text }, ["tenantId"]),
   "POST /api/admin/tenants": object(
     { name: text, hostname: { type: "string", maxLength: 253 } },
@@ -27,6 +36,7 @@ const bodies: Record<string, unknown> = {
           "it",
         ],
       },
+      hkRole: { enum: ["", "manager", "supervisor", "attendant"] },
       properties: { type: "array", items: text, maxItems: 100 },
     },
     ["role", "properties"],
@@ -126,6 +136,7 @@ const bodies: Record<string, unknown> = {
   "POST /api/admin/users": object(
     {
       name: text,
+      hkRole: { enum: ["", "manager", "supervisor", "attendant"] },
       email: { type: "string", format: "email" },
       password: {
         type: "string",

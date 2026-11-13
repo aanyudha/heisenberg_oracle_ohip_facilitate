@@ -89,6 +89,7 @@ describe("startup lifecycle", () => {
         { version: "0003" },
         { version: "0004" },
         { version: "0005" },
+        { version: "0006" },
       ]);
     } finally {
       await db.close();

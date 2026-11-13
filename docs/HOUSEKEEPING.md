@@ -2,6 +2,26 @@
 
 Daily workflow: **OPERA data → drag & drop → Print Worksheet / My Worksheet**.
 
+## Operational refinement (2026-11-13)
+
+The existing screen and deployment architecture are retained. Daily preparation is **Users & Roles → shift/roster → floors → rooms**. Administration → Users & Roles now exposes HK Manager, HK Supervisor and HK Attendant as Housekeeping job classifications alongside the existing authorization role and authorized properties. They use the same registered identity and `housekeeping_staff_profiles`; there is no second user registry or separate worksheet role editor. The old Housekeeping configuration screen no longer edits staff roles, and its legacy staff-write endpoint returns HTTP 410 directing callers to Users & Roles. Create/update classifications through existing User Management POST/PATCH, or property-specific `PATCH /api/admin/users/:id/housekeeping`; all use the same classification service and User Management RBAC. Existing management flags are preserved when the classification is unchanged; explicit property authorization changes use that User Management API. Archived users and missing property grants make staff ineligible; historical assignment records remain intact.
+
+**Configure shifts** on the worksheet creates/edits local property shift names, start/end times and active status. End before start represents an overnight shift; it belongs entirely to the selected property business date, with the property's configured timezone shown in the worksheet. There is no UTC-midnight split or automatic guessed OPERA business date. Dates remain the explicit workspace business-date selection. Inactive definitions and all past data remain stored. Only active shifts can receive new worksheet/roster writes. Migration `0006_housekeeping_shift_active.sql` adds only `housekeeping_shifts.active`, defaulting existing definitions to active; migrations 0004/0005 remain unchanged.
+
+**Manage Shift Staff** selects supervisors and attendants together for the chosen property/date/shift. Missing roster entries mean unavailable, not automatically present. A manager must schedule staff explicitly before new coverage/team/room assignments. Changing shift reloads coverage, roster eligibility, assignments, workload and print scope. Removing someone with active rooms or supervisor floor/room coverage returns an actionable conflict: reassign/release work first. Roster changes are atomic, audited and broadcast; no historical assignments are deleted.
+
+Room search combines with floor, Departure/Stayover, housekeeping status, occupancy, assignment state, room type, supervisor coverage, attendant and priority/service filters. Occupancy is mapped only from the documented `housekeeping.housekeepingRoomStatus.frontOfficeStatus` values Occupied/Vacant ([Oracle overview workflow](https://docs.oracle.com/en/industries/hospitality/integration-platform/hsooo/t_workflow_retrieve_rooms_with_current_housekeeping_status.htm)). Missing/unrecognized occupancy stays unknown; the filter is unavailable when the feed supplies no occupancy. No new outbound query or Oracle write is introduced.
+
+A memoized selector computes matching results. The board initially shows up to 60 matching room cards, with **Show 60 more rooms**. Counts distinguish matching, visible and selected rooms, including selected rooms outside visible results. **Select visible rooms** adds/removes only visible IDs. **Select all matching** requires explicit count confirmation; desktop Shift-click selects a visible ordered range. Selection survives filter changes, clears on scope changes or successful room save, and remains available after failed saves. Mobile uses the same checkboxes and Assign To controls.
+
+The action bar retains one-to-one, many-to-one and reassignment, and adds **Distribute to multiple attendants → Preview → Confirm**. Balanced Credits is the default. The shared deterministic calculator removes selected rooms from current loads, sorts rooms by credits then room ID, and chooses the lowest resulting target load with stable staff-ID ties. Equal Rooms uses room counts. If any selected/current target load has missing or invalid credits, preview explicitly falls back to Equal Rooms; missing credits are flagged and never invented. Preview shows target staff, retained existing rooms/credits, selected rooms/credits, resulting totals and reassignment count. Existing rooms exclude selected rooms before redistribution so they are not counted twice.
+
+One confirmed distribution produces one `distribute` operation in the existing transactional worksheet command, one audit/history record and a whole-operation undo target, including team links added for a supervisor. Every selected room and target is validated against current membership, active accounts, roster, feed and supervisor scope. Manager targets must already have a supervisor; a supervisor can attach an unallocated rostered attendant to their own team in the same operation. Invalid targets/coverage or stale revisions roll back the whole command. Existing local autosave, idempotency, optimistic rollback and property/role-scoped Fastify WebSocket invalidation remain in use.
+
+**Print Worksheet** fetches `/worksheet/print` using the current saved revision and the same assignment query/service as the main worksheet. Pending saves disable printing with a message. The API reconciles saved active assignments with the authorized feed and teams; missing/duplicate rooms or revision mismatch stop print. Counts/credits are aggregated from saved room ownership and current source credit rules, not visible/filter-selected cards. Both report modes support all or explicitly selected supervisors/attendants. Room exceptions follow effective supervisor ownership without duplicate report rows. A selected attendant receives only their assigned rooms. Preview is frozen at its saved revision/snapshot; Print / Save PDF revalidates the revision and source data, and requires reopening preview if they changed. Footer includes generated time, OHIP snapshot timestamp, saved revision and STALE. Native browser headers/footers can supply page numbers when supported/enabled; no PDF service is used.
+
+New endpoints: `GET/PUT /api/local-housekeeping/roster` (manager-only; scope + selected user IDs on PUT), `GET /api/local-housekeeping/worksheet/print` (scope + expected `revision`). Distribution operation: `{type:"distribute",roomIds:[...],attendantIds:[...],mode:"credits"|"equal"}`. Shift PUT adds `active`; all remain local writes. Oracle mutation guards and Task Sheets are untouched.
+
 `/operations/rooms` is one worksheet. Property and business date use the existing workspace controls; shift, actual room-feed sync time, save state and Print Worksheet appear in the worksheet header. Front-office users retain their existing read-only room view. Administrative configuration is separate at `/operations/rooms-settings` and is not part of daily assignment.
 
 ## Audit of the previous implementation
@@ -48,7 +68,7 @@ Overview statuses describe OPERA **now**, not a reconstructed historical snapsho
 - A simple **Assign To** selector provides keyboard/mobile reassignment for authorized managers/supervisors. There is no Save button per room.
 - Undo cancels the last pending move locally, or restores the last persisted move using the undo API. When multiple actions share a debounce batch, undo restores only the final action, not the whole batch. Another user's/configuration edit invalidates undo rather than overwriting their work.
 
-Staff come from existing `users`, active tenant memberships and property grants, with the existing Housekeeping department/job metadata. There is no second user registry. An explicitly unavailable schedule blocks new assignments. Otherwise, a valid registered staff member may start a worksheet immediately; the first write creates that date/shift's Available schedule and resolves coverage locally. An existing shift and one-time property staff-role configuration are still required. Those administrative controls are separate from the daily worksheet.
+Staff come from existing `users`, active tenant memberships and property grants, with the existing Housekeeping department/job metadata. There is no second user registry. An explicitly available roster entry is required before new assignments. Missing entries are unavailable; worksheet saves never manufacture attendance. Configure the registered Housekeeping classification in Users & Roles, select an active shift, then use Manage Shift Staff on the worksheet.
 
 New feed rooms do not require manual room/floor entry. If assigning one needs a legacy directory entry, the backend materializes the verified feed location with `location_source=OHIP`; it does not create an Oracle room or a fake OPERA snapshot row. Missing location remains unavailable. Existing validated local mappings and per-room credit configuration are preserved; local floor mapping applies only when OHIP has no floor. The configuration page remains the place for deliberate validated location/credit changes, subject to existing coverage safeguards.
 
@@ -58,13 +78,13 @@ The existing worksheet now includes **Floor Assignment**: Floor, Total Rooms, Su
 
 Primary floor responsibility is scoped by tenant, property, business date and shift. One floor has one primary supervisor in that scope. The worksheet API rejects duplicate primary ownership unless a manager explicitly requests replacement. The legacy supervisor API also rejects duplicate primary floors, even when a floor currently has no rooms. Shared tenant/property transaction locks serialize these checks; the existing database unique index continues to protect active room assignments.
 
-Supervisors see **My Floors**, **My Attendants**, Unassigned Rooms, Assigned Rooms and Total Credits. A valid active/available supervisor with assigned floor or room responsibility can manage rooms in that effective scope without an extra daily authorization form. They may add an eligible, active, available, property-authorized registered attendant who has no team in this date/shift. Dropping a room on that attendant saves the team link and room assignment together. They cannot take another supervisor's attendant, assign floors, create exceptions, or move rooms outside their own responsibility. Existing explicit management permission remains supported.
+Supervisors see **My Floors**, **My Attendants**, Unassigned Rooms, Assigned Rooms and Total Credits. A valid active supervisor with an explicitly available shift roster entry and assigned floor or room responsibility can manage rooms in that effective scope without an extra daily authorization form. They may add an eligible, active, available, property-authorized registered attendant who has no team in this date/shift. Dropping a room on that attendant saves the team link and room assignment together. They cannot take another supervisor's attendant, assign floors, create exceptions, or move rooms outside their own responsibility. Existing explicit management permission remains supported.
 
 Changing a floor's primary supervisor preserves existing active room assignments, attendant team links, local progress and audit history. Those rooms remain with their existing team as visible room-specific exceptions. Newly unassigned rooms follow the new primary supervisor. A manager may deliberately move the attendant/team or rooms to transfer the retained work. Optional room-specific coverage controls are tucked inside the selected-room actions. An exception belonging to assigned work cannot be silently redirected to a different team. Undo restores floor ownership and exceptions without deleting room work.
 
 Floor values use the actual OHIP field first. A validated local room-directory floor is used only when OHIP supplies no floor. Numbers are never parsed to infer floors, and missing locations stay missing. New verified rooms on an assigned floor automatically appear in its supervisor's scope. Legacy room coverage and historical assignments remain compatible; no synthetic live room is created.
 
-Migrations **0004 and 0005 are reused unchanged**. Primary floors, explicit room exceptions and effective coverage use the existing supervisor-assignment JSON fields. Existing worksheet history stores the supervisor metadata needed for undo. No migration, duplicate user registry or parallel assignment structure is added by this enhancement.
+The floor-responsibility enhancement reused migrations **0004 and 0005 unchanged**. Primary floors, explicit room exceptions and effective coverage use the existing supervisor-assignment JSON fields. Existing worksheet history stores the supervisor metadata needed for undo. The operational refinement adds only migration 0006 for shift active status; no duplicate user registry or parallel assignment structure is added.
 
 ## Autosave, conflicts and history
 
@@ -104,7 +124,7 @@ The preview now offers two modes from the same **Print Worksheet** button. **Sup
 
 Operations include `{type:"rooms",roomIds:[...],attendantId:string|null}`, `{type:"team",attendantId,supervisorId}`, `{type:"floors",floorIds:[...],supervisorId:string|null,replace?:boolean}` and `{type:"coverage",roomIds:[...],supervisorId:string|null}`. Floor and exception operations require manager/administrative RBAC. `replace` defaults to false; the manager UI explicitly requests replacement and explains retained work. Null releases the selected local assignment or coverage. Authorized supervisors can change rooms only within their own effective responsibility; they cannot take another supervisor's attendant or room. Room attendants are read-only. Every route derives tenant from the session; client tenant overrides are rejected. Writes retain session, CSRF, origin and rate-limit protection.
 
-The earlier `/setup`, `/staff`, `/shifts`, `/directory`, `/schedules`, `/supervisors`, `/attendants`, `/progress/:id` and `/board` APIs remain, with their existing RBAC and semantics. They are not Oracle forwarding endpoints. Direct Oracle/proxy namespaces and `/api/housekeeping` mutation guards remain blocked.
+The earlier `/setup`, `/shifts`, `/directory`, `/schedules`, `/supervisors`, `/attendants`, `/progress/:id` and `/board` APIs remain, with their existing RBAC and local scope. The legacy `/staff` setter is closed (410); staff classification and authorization edits belong to User Management only. They are not Oracle forwarding endpoints. Direct Oracle/proxy namespaces and `/api/housekeeping` mutation guards remain blocked.
 
 Migration `0005_housekeeping_worksheet.sql` appends room-feed caching and worksheet-change history tables, directory provenance/configuration flags, an inactive team-link flag and lightweight change-event metadata. It preserves prior data and migrations, users, staff profiles, assignment tables, uniqueness and history. No existing owner database is migrated by the test workflow.
 
@@ -117,6 +137,7 @@ npm.cmd run lint
 npm.cmd run build
 npm.cmd test
 npm.cmd run test:housekeeping-smoke
+npm.cmd run test:housekeeping-operational-smoke
 ```
 
 The browser smoke serves compiled React assets through an isolated source Fastify app, uses random loopback ports and disposable PGlite, and tests real native drag/drop, batch moves, autosave/rollback, manager conflicts, undo, source updates, mobile own/team visibility, WebSocket reassignment, filters, preview and real A4 PDF output. It uses separate browser actors while retaining the application's existing per-IP rate limit. It does not edit `.env`, use owner databases, restart owner processes or deploy production. The unchanged deployment scripts that temporarily edit `.env` are not used by this smoke.
@@ -131,17 +152,35 @@ The HSK source contract and permission/error paths are tested with synthetic tra
 | --- | --- |
 | ESLint | PASS |
 | TypeScript / React production build / Fastify bundle | PASS |
-| Existing and new tests | PASS — 202 tests in 15 files |
+| Existing and new tests | PASS — 217 tests in 16 files |
 | Isolated Chrome/Playwright worksheet smoke | PASS — 33 checks, zero browser page errors |
 | Desktop 1440×1000 / mobile 390×844 | PASS — manager and attendant layouts have no page-level horizontal overflow |
 | Native drag/drop, batch moves, debounce, rollback, undo, user conflicts | PASS |
 | My Worksheet / My Team and scoped WebSocket reassignment | PASS |
 | Single/bulk primary floors, duplicate ownership rejection, supervisor own scope and safe replacement | PASS |
 | Supervisor Master and Attendant modes, saved revision, snapshot STALE and signatures | PASS |
+| Operational 120-room / 3-supervisor / 12-attendant / 2-shift browser fixture | PASS — 19 checks, zero page errors |
+| Search + combined filters, visible/all-matching confirmation, range and retained selection | PASS |
+| 40-to-4 credit distribution, atomic save, whole-batch undo and manager WebSocket update | PASS |
+| Saved print reconciliation against DB room counts and credit aggregation | PASS |
+| Selected supervisor/attendant scope independent of board filters; 40-room multipage A4 PDF | PASS |
+| Explicit PM roster, no attendance default, cross-shift isolation, overnight definition and inactive-write rejection | PASS |
 | Print preview, unclipped tables and actual A4 portrait PDF with attendant page breaks | PASS |
 | OPERA contract mapping, smaller server pagination, safe GET policy and no synthetic live fallback | PASS with synthetic authorized transport |
 | Live OPERA entitlement / real hotel responses | NOT TESTED |
 | External PostgreSQL / Docker acceptance for this change | NOT TESTED |
 | Owner DB migration, owner runtime restart, push or production deployment | NOT PERFORMED |
 
-Current enhancement files: `apps/api/src/housekeeping-worksheet.ts`, `apps/api/src/housekeeping.ts`, `packages/contracts/src/index.ts`, `packages/contracts/src/housekeeping.ts`, `apps/web/src/pages/FloorAssignment.tsx`, `apps/web/src/pages/HousekeepingWorksheet.tsx`, `apps/web/src/pages/HousekeepingWorksheet.css`, `apps/web/src/pages/WorksheetPrint.tsx`, `apps/web/src/worksheet-model.ts`, `tests/floors.test.ts`, `tests/worksheet.test.ts`, `tests/worksheet-frontend.test.tsx`, `scripts/housekeeping-smoke.ts`, this guide and `CHANGELOG.md`.
+### Files in the operational refinement
+
+| Area | Files |
+| --- | --- |
+| API | `apps/api/src/app.ts`, `db.ts`, `housekeeping.ts`, `housekeeping-worksheet.ts`, `housekeeping-mapper.ts`, `openapi.ts` |
+| UI | `apps/web/src/pages/Admin.tsx`, `Housekeeping.tsx`, `HousekeepingWorksheet.tsx`, `HousekeepingWorksheet.css`, `WorksheetPrint.tsx`, new `BulkDistribution.tsx`, new `ShiftControls.tsx`; `apps/web/src/worksheet-model.ts` |
+| Shared contracts | `packages/contracts/src/index.ts`, new `distribution.ts` |
+| Migration | New `db/migrations/0006_housekeeping_shift_active.sql` |
+| Tests | `tests/housekeeping-fixture.ts`, new `housekeeping-operational-fixture.ts`, new `housekeeping-operational.test.ts`, `housekeeping.test.ts`, `worksheet-frontend.test.tsx`, `worksheet.test.ts`, `floors.test.ts`, `startup.test.ts`, `connection-migration.test.ts` |
+| Browser tooling | `scripts/housekeeping-smoke.ts`, new `housekeeping-operational-smoke.ts`, `package.json` |
+| Documentation | `docs/HOUSEKEEPING.md`, `CHANGELOG.md` |
+
+Operational artifacts: `artifacts/housekeeping-operational-smoke.json`, `housekeeping-operational-40-rooms.pdf` and `housekeeping-operational-mobile.png`. These use disposable local DEMO fixtures, not production rooms. The original worksheet browser suite remains separate and retains native drag/drop, rollback, conflicts and print-dialog checks. Both scripts pace fresh actors/phases across the unchanged per-IP request-limit window rather than disabling security limits.

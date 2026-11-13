@@ -24,6 +24,7 @@ const overview = (hotelId = "HKHOTEL") => ({
           housekeeping: {
             housekeepingRoomStatus: {
               housekeepingRoomStatus: "Dirty",
+              frontOfficeStatus: "Occupied",
               reservationStatusList: ["DueOut", "Arrival"],
             },
             guestServiceRequest: "DoNotDisturb",
@@ -124,6 +125,7 @@ beforeAll(async () => {
   f = await housekeepingFixture(false, {
     ohipTransport: transport as typeof fetch,
   });
+  for (const d of [12, 13, 14, 15, 16, 17]) await f.plan(`2026-11-${d}`);
 }, 60000);
 afterAll(async () => {
   await f?.close();
@@ -160,7 +162,7 @@ async function move(
   );
 }
 describe("single-screen worksheet backend", () => {
-  it("loads registered staff and all actual demo snapshot rooms without daily setup", async () => {
+  it("loads registered staff and all actual demo snapshot rooms with an explicit shift roster", async () => {
     const s = await sheet();
     expect(s.feed.source).toBe("DEMO");
     expect(s.rooms).toHaveLength(6);
@@ -179,7 +181,7 @@ describe("single-screen worksheet backend", () => {
     const schedules = await f.db.query(
       sql`SELECT user_id FROM housekeeping_staff_schedules WHERE tenant_id='demo' AND property_id='demo-1' AND business_date=${date}`,
     );
-    expect(schedules).toHaveLength(2);
+    expect(schedules).toHaveLength(5);
   });
   it("atomically transfers rooms across attendants and supervisor coverage", async () => {
     const r = await move(date, [
@@ -430,7 +432,7 @@ describe("single-screen worksheet backend", () => {
       supervisorId: f.s1.id,
       floors: ["West"],
     });
-    await f.ok("staff", {
+    await f.roleOk({
       propertyId: "demo-1",
       userId: f.s1.id,
       department: "Housekeeping",
@@ -570,6 +572,7 @@ describe("authorized OPERA room feed", () => {
       id: "V101",
       floor: "Garden",
       status: "Dirty",
+      occupancy: "Occupied",
       departure: true,
       arrival: true,
       vip: true,

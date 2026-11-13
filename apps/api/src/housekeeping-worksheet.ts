@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { distributeRooms } from "@hospitality/contracts";
 import { randomUUID, createHash } from "node:crypto";
 import { z } from "zod";
 import type {
@@ -250,7 +251,7 @@ export function registerHousekeepingWorksheet(
         ).rows[0] as { id: string; name: string };
         const shift = (
           await tx.execute(
-            sql`SELECT id,name FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${s.propertyId} AND id=${s.shiftId}`,
+            sql`SELECT id,name FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${s.propertyId} AND id=${s.shiftId} AND active`,
           )
         ).rows[0] as { id: string; name: string } | undefined;
         if (!shift) throw fail(404, "Shift not found");
@@ -319,7 +320,7 @@ export function registerHousekeepingWorksheet(
               (r) => r.user_id === uid && r.job_role === role,
             ),
             available:
-              schedules.find((r) => r.user_id === uid)?.available !== false,
+              schedules.find((r) => r.user_id === uid)?.available === true,
           }));
         const attendants = staff(visibleAttendantIds, "attendant"),
           supervisors = staff(visibleSupervisorIds, "supervisor");
@@ -403,13 +404,14 @@ export function registerHousekeepingWorksheet(
           canManage: !!(
             a.manager ||
             (a.self?.job_role === "supervisor" &&
-              schedules.find((r) => r.user_id === u.id)?.available !== false &&
+              schedules.find((r) => r.user_id === u.id)?.available === true &&
               (a.self.can_manage ||
                 rooms.length > 0 ||
                 plan.supervisors.some(
                   (r) => r.supervisor_id === u.id && r.floors.length > 0,
                 )))
           ),
+          rosterConfigured: schedules.some((r) => r.available),
           rooms,
           floorAssignments: worksheetFloorRows(
             rooms,
@@ -478,9 +480,73 @@ export function registerHousekeepingWorksheet(
     const source = await currentFeed(u, s);
     return getWorksheet(u, s, source);
   });
+  app.get("/api/local-housekeeping/worksheet/print", async (req) => {
+    const { revision: expected, ...s } = scopeSchema
+      .extend({ revision: z.string().regex(/^\d+$/) })
+      .strict()
+      .parse(req.query);
+    const source = await currentFeed(req.principal, s);
+    const sheet = await getWorksheet(req.principal, s, source);
+    if (sheet.revision !== expected)
+      throw fail(
+        409,
+        "Saved worksheet revision changed. Refresh the worksheet and retry print.",
+      );
+    if (!sheet.feed.available || sheet.missingAssignedRooms)
+      throw fail(
+        409,
+        "Print reconciliation failed: assigned rooms are missing from the authorized room feed. Restore the feed before printing.",
+      );
+    const ids = new Set(sheet.rooms.map((r) => r.id));
+    if (
+      ids.size !== sheet.rooms.length ||
+      Object.keys(sheet.assignments).some((id) => !ids.has(id)) ||
+      Object.values(sheet.assignments).some((uid) => !sheet.team[uid])
+    )
+      throw fail(
+        409,
+        "Print reconciliation failed: assignment room/team counts do not match. Refresh and review assignments.",
+      );
+    return {
+      ...sheet,
+      reconciliation: {
+        assignedRooms: Object.keys(sheet.assignments).length,
+        attendants: sheet.attendants.map((a) => {
+          const rooms = sheet.rooms.filter(
+            (r) => sheet.assignments[r.id] === a.id,
+          );
+          return {
+            id: a.id,
+            rooms: rooms.length,
+            credits:
+              Math.round(
+                rooms.reduce((n, r) => n + (r.credits ?? 0), 0) * 100,
+              ) / 100,
+            missingCredits: rooms.filter((r) => r.credits === null).length,
+          };
+        }),
+      },
+    };
+  });
   const operations = z
     .array(
       z.discriminatedUnion("type", [
+        z
+          .object({
+            type: z.literal("distribute"),
+            roomIds: z
+              .array(id)
+              .min(1)
+              .max(1000)
+              .refine((v) => new Set(v).size === v.length),
+            attendantIds: z
+              .array(id)
+              .min(1)
+              .max(100)
+              .refine((v) => new Set(v).size === v.length),
+            mode: z.enum(["equal", "credits"]),
+          })
+          .strict(),
         z
           .object({
             type: z.literal("rooms"),
@@ -567,7 +633,7 @@ export function registerHousekeepingWorksheet(
     ).rows as Row[];
     const available = (uid: string, role: string) =>
       a.staff.some((r) => r.user_id === uid && r.job_role === role) &&
-      schedules.find((r) => r.user_id === uid)?.available !== false;
+      schedules.find((r) => r.user_id === uid)?.available === true;
     const beforeProjection = resolveWorksheetCoverage(
       coverageRows(before.supervisors),
       rooms,
@@ -658,7 +724,6 @@ export function registerHousekeepingWorksheet(
             "Cannot move a team with rooms missing from the authorized feed",
           );
     }
-    const affectedStaff = new Set<string>();
     const intent =
       supervisorIntent || restore?.supervisors || before.supervisors;
     const projected = resolveWorksheetCoverage(
@@ -685,25 +750,8 @@ export function registerHousekeepingWorksheet(
             409,
             "Supervisor is inactive or unavailable for this date and shift",
           );
-        affectedStaff.add(row.supervisor_id);
       }
     }
-    for (const uid of changedTeam) {
-      affectedStaff.add(uid);
-      affectedStaff.add(team.get(uid)!);
-    }
-    for (const rid of changedRooms) {
-      const uid = assignments.get(rid);
-      if (uid) {
-        affectedStaff.add(uid);
-        affectedStaff.add(team.get(uid)!);
-      }
-    }
-    // Roster membership is enough to start a worksheet; no daily availability form is required.
-    for (const uid of affectedStaff)
-      await tx.execute(
-        sql`INSERT INTO housekeeping_staff_schedules VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${uid},true) ON CONFLICT DO NOTHING`,
-      );
     for (const uid of assignments.values())
       if (!team.has(uid)) throw fail(409, "Attendant has no supervisor");
     const coverage = new Map<string, Set<string>>();
@@ -736,9 +784,6 @@ export function registerHousekeepingWorksheet(
       if (!old) {
         if (!available(supervisor, "supervisor"))
           throw fail(409, "Supervisor is not eligible");
-        await tx.execute(
-          sql`INSERT INTO housekeeping_staff_schedules VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${supervisor},true) ON CONFLICT DO NOTHING`,
-        );
       }
       if (!unchanged || !old)
         await tx.execute(
@@ -838,7 +883,7 @@ export function registerHousekeepingWorksheet(
       if (
         !(
           await tx.execute(
-            sql`SELECT 1 FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${s.propertyId} AND id=${s.shiftId}`,
+            sql`SELECT 1 FROM housekeeping_shifts WHERE tenant_id=${u.tenantId} AND property_id=${s.propertyId} AND id=${s.shiftId} AND active`,
           )
         ).rows.length
       )
@@ -912,7 +957,81 @@ export function registerHousekeepingWorksheet(
             assignments: Object.fromEntries(assignments),
             supervisors: cloneSupervisors(supervisorIntent),
           };
-          if (op.type === "team") team.set(op.attendantId, op.supervisorId);
+          if (op.type === "distribute") {
+            if (
+              !source.available ||
+              op.roomIds.some((rid) => !verifiedIds.has(rid))
+            )
+              throw fail(
+                409,
+                "Selected rooms are absent from the current authorized feed. Refresh and retry.",
+              );
+            if (!a.manager) {
+              const ownership = resolveWorksheetCoverage(
+                coverageRows(before.supervisors),
+                verifiedRooms,
+                Object.fromEntries(
+                  before.rooms.map((r) => [r.room_id, r.attendant_id]),
+                ),
+                Object.fromEntries(
+                  before.attendants.map((r) => [
+                    r.attendant_id,
+                    r.supervisor_id,
+                  ]),
+                ),
+              );
+              if (op.roomIds.some((rid) => ownership.roomOwners[rid] !== u.id))
+                throw fail(
+                  403,
+                  "Selected rooms include work outside your supervisor coverage",
+                );
+              if (
+                op.attendantIds.some(
+                  (uid) => team.has(uid) && team.get(uid) !== u.id,
+                )
+              )
+                throw fail(
+                  403,
+                  "Selected attendants include another supervisor team",
+                );
+            }
+            const roster = (
+              await tx.execute(
+                sql`SELECT user_id FROM housekeeping_staff_schedules WHERE ${where(u, s)} AND available`,
+              )
+            ).rows;
+            for (const uid of op.attendantIds) {
+              if (
+                !a.staff.some(
+                  (r) => r.user_id === uid && r.job_role === "attendant",
+                ) ||
+                !roster.some((r) => r.user_id === uid)
+              )
+                throw fail(
+                  409,
+                  `Attendant ${uid} is not active and rostered for this shift`,
+                );
+              if (!team.has(uid) && !a.manager) team.set(uid, u.id);
+              if (!team.has(uid))
+                throw fail(
+                  409,
+                  "Place target attendants under a supervisor first",
+                );
+            }
+            const distribution = distributeRooms(
+              {
+                rooms: verifiedRooms,
+                assignments: Object.fromEntries(assignments),
+              },
+              op.roomIds,
+              op.attendantIds,
+              op.mode,
+            );
+            for (const row of distribution.rows)
+              for (const rid of row.roomIds)
+                assignments.set(rid, row.attendantId);
+          } else if (op.type === "team")
+            team.set(op.attendantId, op.supervisorId);
           else if (op.type === "floors") {
             if (!a.manager)
               throw fail(403, "Only managers can assign primary floors");

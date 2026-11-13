@@ -43,6 +43,7 @@ const roomSchema = z.object({
         "OutOfService",
       ]),
       reservationStatusList: z.array(text).optional(),
+      frontOfficeStatus: text.optional(),
     }),
     guestServiceRequest: text.optional(),
     cleaningPriority: z
@@ -112,6 +113,11 @@ export function mapHousekeepingOverview(
       );
       return {
         id: r.roomId,
+        occupancy: ["Occupied", "Vacant"].includes(
+          r.housekeeping.housekeepingRoomStatus.frontOfficeStatus || "",
+        )
+          ? r.housekeeping.housekeepingRoomStatus.frontOfficeStatus
+          : null,
         floor: r.floor || null,
         floorSource: r.floor ? "OHIP" : "unavailable",
         section: r.roomSection?.daySectionCode || null,

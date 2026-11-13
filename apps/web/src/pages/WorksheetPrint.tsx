@@ -2,6 +2,7 @@ import { createPortal } from "react-dom";
 import { useEffect, useState } from "react";
 import type { Worksheet, WorksheetRoom } from "@hospitality/contracts";
 import { workload } from "../worksheet-model";
+import { api } from "../api";
 export default function WorksheetPrint({
   sheet,
   onClose,
@@ -13,6 +14,42 @@ export default function WorksheetPrint({
     sheet.selfRole === "attendant" ? "attendant" : "master",
   );
   const [now, setNow] = useState(Date.now());
+  const [reportId, setReportId] = useState(""),
+    [printError, setPrintError] = useState(""),
+    [checking, setChecking] = useState(false);
+  const [generatedAt] = useState(() => new Date().toLocaleString());
+  async function printSaved() {
+    setChecking(true);
+    setPrintError("");
+    try {
+      const current = await api<Worksheet>(
+        "/local-housekeeping/worksheet/print?" +
+          new URLSearchParams({ ...sheet.scope, revision: sheet.revision }),
+      );
+      if (
+        JSON.stringify([
+          current.assignments,
+          current.rooms,
+          current.team,
+          current.supervisorFloors,
+        ]) !==
+        JSON.stringify([
+          sheet.assignments,
+          sheet.rooms,
+          sheet.team,
+          sheet.supervisorFloors,
+        ])
+      )
+        throw Error(
+          "Worksheet or room snapshot changed. Close preview and retry Print Worksheet.",
+        );
+      window.print();
+    } catch (e) {
+      setPrintError((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  }
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 15000);
     return () => clearInterval(timer);
@@ -118,6 +155,14 @@ export default function WorksheetPrint({
       </p>
     </>
   );
+  const footer = (
+    <footer className="worksheet-print-footer">
+      Generated at: {generatedAt} · OHIP snapshot:{" "}
+      {sheet.feed.syncedAt || "No Oracle sync"} · Saved revision:{" "}
+      {sheet.revision}
+      {stale ? " · STALE" : ""}
+    </footer>
+  );
   const unassigned = sheet.rooms.filter((r) => !sheet.assignments[r.id]);
   const owner = (r: WorksheetRoom) =>
     sheet.roomSupervisors?.[r.id] ||
@@ -180,19 +225,48 @@ export default function WorksheetPrint({
             <select
               aria-label="Worksheet print mode"
               value={mode}
-              onChange={(e) =>
-                setMode(e.target.value as "master" | "attendant")
-              }
+              onChange={(e) => {
+                setMode(e.target.value as "master" | "attendant");
+                setReportId("");
+              }}
             >
               <option value="master">Supervisor Master Worksheet</option>
               <option value="attendant">Attendant Worksheet</option>
             </select>
           </label>
         )}
+        {sheet.selfRole !== "attendant" && (
+          <label>
+            Print scope
+            <select
+              aria-label="Print scope"
+              value={reportId}
+              onChange={(e) => setReportId(e.target.value)}
+            >
+              <option value="">
+                {mode === "master"
+                  ? "Print All Supervisors"
+                  : "Print All Attendants"}
+              </option>
+              {(mode === "master"
+                ? sheet.supervisors
+                : sheet.attendants.filter((a) => sheet.team[a.id])
+              ).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {mode === "master"
+                    ? "Print Selected Supervisor: "
+                    : "Print Selected Attendant: "}
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {printError && <p role="alert">{printError}</p>}
         <button
           className="primary"
-          disabled={!sheet.feed.available}
-          onClick={() => window.print()}
+          disabled={!sheet.feed.available || checking || !!printError}
+          onClick={() => void printSaved()}
         >
           Print / Save PDF
         </button>
@@ -203,72 +277,77 @@ export default function WorksheetPrint({
       <div className="worksheet-print">
         {mode === "master" && sheet.selfRole !== "attendant" && (
           <>
-            {sheet.supervisors.map((spv) => {
-              const coverage = sheet.rooms.filter((r) => owner(r) === spv.id),
-                members = sheet.attendants.filter(
-                  (a) => sheet.team[a.id] === spv.id,
-                ),
-                pending = coverage.filter((r) => !sheet.assignments[r.id]);
-              const assignedFloors = sheet.supervisorFloors?.[spv.id] || [
-                ...new Set(
-                  coverage.map((r) => r.floor).filter((f): f is string => !!f),
-                ),
-              ];
-              return (
-                <section
-                  className="worksheet-print-page worksheet-print-master"
-                  key={spv.id}
-                >
-                  {header(`Supervisor: ${spv.name}`)}
-                  <h2>Supervisor Master Worksheet</h2>
-                  <p>Supervisor: {spv.name}</p>
-                  <p>
-                    Assigned floors:{" "}
-                    {assignedFloors.join(", ") || "Room-specific coverage"}
-                  </p>
-                  <h3>Total per floor</h3>
-                  {floorTotals(coverage, assignedFloors)}
-                  {members.map((att) => (
-                    <div className="worksheet-print-team" key={att.id}>
-                      <h3>Attendant: {att.name}</h3>
-                      {assigned(att.id).length ? (
-                        roomTable(assigned(att.id))
-                      ) : (
-                        <p>No rooms assigned.</p>
-                      )}
-                      <p className="worksheet-print-total">
-                        Attendant total: {totals(assigned(att.id))}
-                      </p>
-                    </div>
-                  ))}
-                  {!members.length && <p>No attendants assigned.</p>}
-                  <h3>Unassigned rooms ({pending.length})</h3>
-                  {pending.length ? (
-                    roomTable(pending)
-                  ) : (
-                    <p>No unassigned rooms in this supervisor's coverage.</p>
-                  )}
-                  <p className="worksheet-print-total">
-                    Supervisor total ({spv.name}): {totals(coverage)}
-                  </p>
-                  <p>
-                    Assigned workload:{" "}
-                    {totals(coverage.filter((r) => sheet.assignments[r.id]))}
-                  </p>
-                  {coverage.some((r) => sheet.roomExceptions?.[r.id]) && (
-                    <p className="worksheet-print-note">
-                      Room-specific exceptions:{" "}
-                      {coverage
-                        .filter((r) => sheet.roomExceptions?.[r.id])
-                        .map((r) => r.id)
-                        .join(", ")}
-                      . Existing attendant work has been retained.
+            {sheet.supervisors
+              .filter((s) => !reportId || s.id === reportId)
+              .map((spv) => {
+                const coverage = sheet.rooms.filter((r) => owner(r) === spv.id),
+                  members = sheet.attendants.filter(
+                    (a) => sheet.team[a.id] === spv.id,
+                  ),
+                  pending = coverage.filter((r) => !sheet.assignments[r.id]);
+                const assignedFloors = sheet.supervisorFloors?.[spv.id] || [
+                  ...new Set(
+                    coverage
+                      .map((r) => r.floor)
+                      .filter((f): f is string => !!f),
+                  ),
+                ];
+                return (
+                  <section
+                    className="worksheet-print-page worksheet-print-master"
+                    key={spv.id}
+                  >
+                    {header(`Supervisor: ${spv.name}`)}
+                    <h2>Supervisor Master Worksheet</h2>
+                    <p>Supervisor: {spv.name}</p>
+                    <p>
+                      Assigned floors:{" "}
+                      {assignedFloors.join(", ") || "Room-specific coverage"}
                     </p>
-                  )}
-                </section>
-              );
-            })}
-            {sheet.manager && (
+                    <h3>Total per floor</h3>
+                    {floorTotals(coverage, assignedFloors)}
+                    {members.map((att) => (
+                      <div className="worksheet-print-team" key={att.id}>
+                        <h3>Attendant: {att.name}</h3>
+                        {assigned(att.id).length ? (
+                          roomTable(assigned(att.id))
+                        ) : (
+                          <p>No rooms assigned.</p>
+                        )}
+                        <p className="worksheet-print-total">
+                          Attendant total: {totals(assigned(att.id))}
+                        </p>
+                      </div>
+                    ))}
+                    {!members.length && <p>No attendants assigned.</p>}
+                    <h3>Unassigned rooms ({pending.length})</h3>
+                    {pending.length ? (
+                      roomTable(pending)
+                    ) : (
+                      <p>No unassigned rooms in this supervisor's coverage.</p>
+                    )}
+                    <p className="worksheet-print-total">
+                      Supervisor total ({spv.name}): {totals(coverage)}
+                    </p>
+                    <p>
+                      Assigned workload:{" "}
+                      {totals(coverage.filter((r) => sheet.assignments[r.id]))}
+                    </p>
+                    {coverage.some((r) => sheet.roomExceptions?.[r.id]) && (
+                      <p className="worksheet-print-note">
+                        Room-specific exceptions:{" "}
+                        {coverage
+                          .filter((r) => sheet.roomExceptions?.[r.id])
+                          .map((r) => r.id)
+                          .join(", ")}
+                        . Existing attendant work has been retained.
+                      </p>
+                    )}
+                    {footer}
+                  </section>
+                );
+              })}
+            {sheet.manager && !reportId && (
               <section className="worksheet-print-page">
                 {header("No supervisor coverage")}
                 <h2>Unassigned Rooms — No Supervisor</h2>
@@ -279,6 +358,7 @@ export default function WorksheetPrint({
                   All unassigned rooms: {unassigned.length}. Other unassigned
                   rooms are listed on their supervisor's master sheet.
                 </p>
+                {footer}
               </section>
             )}
           </>
@@ -286,7 +366,8 @@ export default function WorksheetPrint({
         {mode === "attendant" &&
           sheet.supervisors.map((spv) => {
             const attendants = sheet.attendants.filter(
-              (a) => sheet.team[a.id] === spv.id,
+              (a) =>
+                sheet.team[a.id] === spv.id && (!reportId || a.id === reportId),
             );
             const supervisorRooms = sheet.rooms.filter(
               (r) => sheet.team[sheet.assignments[r.id]] === spv.id,
@@ -335,10 +416,11 @@ export default function WorksheetPrint({
                     <span />
                   </div>
                 </div>
+                {footer}
               </section>
             ));
           })}
-        {mode === "attendant" && sheet.manager && (
+        {mode === "attendant" && sheet.manager && !reportId && (
           <section className="worksheet-print-page">
             {header("Unassigned rooms")}
             <h2>Unassigned rooms ({unassigned.length})</h2>
@@ -353,6 +435,7 @@ export default function WorksheetPrint({
                 .map((a) => a.name)
                 .join(", ") || "None"}
             </p>
+            {footer}
           </section>
         )}
         {mode === "attendant" &&
@@ -361,6 +444,7 @@ export default function WorksheetPrint({
             <section className="worksheet-print-page">
               {header("No assigned rooms")}
               <p>No rooms assigned.</p>
+              {footer}
             </section>
           )}
       </div>

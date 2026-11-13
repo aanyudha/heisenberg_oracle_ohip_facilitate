@@ -701,7 +701,7 @@ export async function buildApp(
         sql`SELECT * FROM properties WHERE tenant_id=${u.tenantId} AND id IN (${scope(u)}) AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=properties.tenant_id AND a.kind='properties' AND a.target=properties.id)`,
       ),
       users: await db.query(
-        sql`SELECT u.id,u.name,u.email,m.role,(SELECT coalesce(json_agg(property_id),'[]') FROM property_grants g WHERE g.user_id=u.id AND g.tenant_id=m.tenant_id) AS properties FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=${u.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND a.kind='users' AND a.target=m.user_id)`,
+        sql`SELECT u.id,u.name,u.email,m.role,(SELECT coalesce(json_agg(property_id),'[]') FROM property_grants g WHERE g.user_id=u.id AND g.tenant_id=m.tenant_id) AS properties,(SELECT coalesce(json_agg(json_build_object('propertyId',h.property_id,'jobRole',h.job_role)),'[]') FROM housekeeping_staff_profiles h WHERE h.tenant_id=m.tenant_id AND h.user_id=u.id) AS hkProfiles FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=${u.tenantId} AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND a.kind='users' AND a.target=m.user_id)`,
       ),
     };
   });
@@ -838,6 +838,99 @@ export async function buildApp(
     });
     return { id: pid };
   });
+  async function saveHkRole(
+    tx: { execute: typeof db.orm.execute },
+    u: Principal,
+    uid: string,
+    properties: string[],
+    role: string,
+    hkRole?: string,
+    canManage?: boolean,
+    specificProperty?: string,
+  ) {
+    if (hkRole === undefined) return;
+    if (hkRole && !["housekeeping", "hotel_manager"].includes(role))
+      throw fail(
+        400,
+        "Housekeeping job classification requires Housekeeping or Hotel Manager authorization",
+      );
+    const old = (
+      await tx.execute(
+        sql`SELECT property_id,job_role FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND user_id=${uid} ${specificProperty ? sql`AND property_id=${specificProperty}` : sql``}`,
+      )
+    ).rows;
+    for (const r of old)
+      if (
+        r.job_role !== hkRole ||
+        !properties.includes(String(r.property_id))
+      ) {
+        if (
+          (
+            await tx.execute(
+              sql`SELECT 1 FROM housekeeping_room_assignments WHERE tenant_id=${u.tenantId} AND property_id=${r.property_id} AND attendant_id=${uid} AND active UNION ALL SELECT 1 FROM housekeeping_supervisor_assignments WHERE tenant_id=${u.tenantId} AND property_id=${r.property_id} AND supervisor_id=${uid} AND (floors!='[]'::jsonb OR rooms!='[]'::jsonb OR coverage!='[]'::jsonb)`,
+            )
+          ).rows.length
+        )
+          throw fail(
+            409,
+            "Reassign/release active Housekeeping work before changing job classification or membership",
+          );
+      }
+    if (!hkRole)
+      await tx.execute(
+        sql`DELETE FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND user_id=${uid}`,
+      );
+    else
+      for (const p of new Set(properties))
+        await tx.execute(
+          sql`INSERT INTO housekeeping_staff_profiles(tenant_id,property_id,user_id,department,job_role,can_manage) VALUES (${u.tenantId},${p},${uid},'Housekeeping',${hkRole},${hkRole === "supervisor" && !!canManage}) ON CONFLICT(tenant_id,property_id,user_id) DO UPDATE SET job_role=excluded.job_role,can_manage=CASE WHEN housekeeping_staff_profiles.job_role=excluded.job_role THEN coalesce(${canManage ?? null},housekeeping_staff_profiles.can_manage) ELSE excluded.can_manage END`,
+        );
+  }
+  app.patch("/api/admin/users/:id/housekeeping", async (req) => {
+    const u = req.principal;
+    requireRole(canAdmin(u.role));
+    const uid = id.parse((req.params as any).id),
+      b = z
+        .object({
+          propertyId: id,
+          jobRole: z.enum(["manager", "supervisor", "attendant"]),
+          canManage: z.boolean().default(false),
+          department: z.literal("Housekeeping").optional(),
+        })
+        .strict()
+        .parse(req.body);
+    property(u, b.propertyId);
+    if (uid === u.id)
+      throw fail(409, "Use another administrator to change your own access");
+    return db.orm.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${u.tenantId},7291043001))`,
+      );
+      const target = (
+        await tx.execute(
+          sql`SELECT m.role FROM memberships m JOIN property_grants g ON g.tenant_id=m.tenant_id AND g.user_id=m.user_id WHERE m.tenant_id=${u.tenantId} AND m.user_id=${uid} AND g.property_id=${b.propertyId} AND m.role IN ('housekeeping','hotel_manager') AND NOT EXISTS(SELECT 1 FROM local_archives a WHERE a.tenant_id=m.tenant_id AND (a.kind='tenants' OR (a.kind='users' AND a.target=m.user_id) OR (a.kind='properties' AND a.target=g.property_id)))`,
+        )
+      ).rows[0];
+      if (!target)
+        throw fail(
+          400,
+          "Active registered Housekeeping staff with authorized property membership required",
+        );
+      await saveHkRole(
+        tx,
+        u,
+        uid,
+        [b.propertyId],
+        String(target.role),
+        b.jobRole,
+        b.canManage,
+        b.propertyId,
+      );
+      await audit(tx, u, b.propertyId, "membership.housekeeping.update", uid);
+      await appendEvent(tx, u.tenantId, null, "reconcile");
+      return { ok: true };
+    });
+  });
   app.post("/api/admin/users", async (req) => {
     const u = req.principal;
     requireRole(canAdmin(u.role));
@@ -847,6 +940,7 @@ export async function buildApp(
         email: z.email(),
         password: z.string().min(12).max(256),
         role: z.enum(roles),
+        hkRole: z.enum(["", "manager", "supervisor", "attendant"]).optional(),
         properties: z.array(id).max(100),
       })
       .parse(req.body);
@@ -866,7 +960,9 @@ export async function buildApp(
         await tx.execute(
           sql`INSERT INTO property_grants VALUES (${u.tenantId},${uid},${p})`,
         );
+      await saveHkRole(tx, u, uid, b.properties, b.role, b.hkRole);
       await audit(tx, u, null, "user.create", uid);
+      await appendEvent(tx, u.tenantId, null, "reconcile");
     });
     return { id: uid };
   });
@@ -875,7 +971,11 @@ export async function buildApp(
     requireRole(canAdmin(u.role));
     const uid = id.parse((req.params as any).id),
       b = z
-        .object({ role: z.enum(roles), properties: z.array(id).max(100) })
+        .object({
+          role: z.enum(roles),
+          hkRole: z.enum(["", "manager", "supervisor", "attendant"]).optional(),
+          properties: z.array(id).max(100),
+        })
         .parse(req.body);
     if (uid === u.id)
       throw fail(409, "Use another administrator to change your own access");
@@ -916,6 +1016,23 @@ export async function buildApp(
         ).rows.length
       )
         throw fail(409, "Last administrator cannot be demoted");
+      for (const g of targetGrants)
+        if (
+          !b.properties.includes(g.property_id) ||
+          !["housekeeping", "hotel_manager"].includes(b.role)
+        ) {
+          if (
+            (
+              await tx.execute(
+                sql`SELECT 1 FROM housekeeping_room_assignments WHERE tenant_id=${u.tenantId} AND property_id=${g.property_id} AND attendant_id=${uid} AND active UNION ALL SELECT 1 FROM housekeeping_supervisor_assignments WHERE tenant_id=${u.tenantId} AND property_id=${g.property_id} AND supervisor_id=${uid} AND (floors!='[]'::jsonb OR rooms!='[]'::jsonb OR coverage!='[]'::jsonb)`,
+              )
+            ).rows.length
+          )
+            throw fail(
+              409,
+              "Reassign/release active Housekeeping work before changing membership",
+            );
+        }
       const grants = b.properties.length
         ? sql.join(
             b.properties.map((p) => sql`${p}`),
@@ -932,6 +1049,7 @@ export async function buildApp(
         await tx.execute(
           sql`INSERT INTO property_grants VALUES (${u.tenantId},${uid},${p}) ON CONFLICT DO NOTHING`,
         );
+      await saveHkRole(tx, u, uid, b.properties, b.role, b.hkRole);
       await tx.execute(
         sql`UPDATE memberships SET role=${b.role} WHERE tenant_id=${u.tenantId} AND user_id=${uid}`,
       );

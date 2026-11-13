@@ -13,6 +13,7 @@ export type WorksheetScope = {
   shiftId: string;
 };
 export type WorksheetRoom = {
+  occupancy?: "Occupied" | "Vacant" | null;
   id: string;
   floor: string | null;
   floorSource: "OHIP" | "local_validated" | "unavailable";
@@ -40,7 +41,14 @@ export type WorksheetStaff = {
   available: boolean;
   active: boolean;
 };
+export { distributeRooms } from "./distribution.js";
 export type WorksheetOperation =
+  | {
+      type: "distribute";
+      roomIds: string[];
+      attendantIds: string[];
+      mode: "equal" | "credits";
+    }
   | { type: "rooms"; roomIds: string[]; attendantId: string | null }
   | { type: "team"; attendantId: string; supervisorId: string }
   | {
@@ -72,6 +80,7 @@ export {
   worksheetFloorRows,
 } from "./housekeeping.js";
 export type Worksheet = {
+  rosterConfigured?: boolean;
   scope: WorksheetScope;
   property: { id: string; name: string };
   shift: { id: string; name: string };

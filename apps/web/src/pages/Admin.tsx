@@ -300,6 +300,7 @@ export default function Admin() {
                   "/admin/users/" + editing.id,
                   (f) => ({
                     role: f.get("role"),
+                    hkRole: f.get("hkRole"),
                     properties: f.getAll("properties"),
                   }),
                   "PATCH",
@@ -318,6 +319,23 @@ export default function Admin() {
                         <option key={r}>{r}</option>
                       ))}
                   </select>
+                </label>
+                <label>
+                  Housekeeping job classification
+                  <select
+                    name="hkRole"
+                    defaultValue={editing?.hkProfiles?.[0]?.jobRole || ""}
+                  >
+                    <option value="">No HK job classification</option>
+                    <option value="manager">HK Manager</option>
+                    <option value="supervisor">HK Supervisor</option>
+                    <option value="attendant">HK Attendant</option>
+                  </select>
+                  <small>
+                    Department: Housekeeping. Applies to selected authorized
+                    properties; requires Housekeeping or Hotel Manager
+                    authorization above.
+                  </small>
                 </label>
                 <fieldset className="full">
                   <legend>Authorized properties</legend>
@@ -435,6 +453,23 @@ export default function Admin() {
                         <option key={r}>{r}</option>
                       ))}
                   </select>
+                </label>
+                <label>
+                  Housekeeping job classification
+                  <select
+                    name="hkRole"
+                    defaultValue={editing?.hkProfiles?.[0]?.jobRole || ""}
+                  >
+                    <option value="">No HK job classification</option>
+                    <option value="manager">HK Manager</option>
+                    <option value="supervisor">HK Supervisor</option>
+                    <option value="attendant">HK Attendant</option>
+                  </select>
+                  <small>
+                    Department: Housekeeping. Applies to selected authorized
+                    properties; requires Housekeeping or Hotel Manager
+                    authorization above.
+                  </small>
                 </label>
                 <fieldset className="full">
                   <legend>Authorized properties</legend>

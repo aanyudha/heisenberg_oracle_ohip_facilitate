@@ -58,7 +58,7 @@ describe("local Housekeeping assignments", () => {
     ]) {
       expect(
         (
-          await f.call("staff", {
+          await f.roleCall({
             propertyId: "demo-1",
             userId,
             department: "Housekeeping",
@@ -83,7 +83,7 @@ describe("local Housekeeping assignments", () => {
     ).toBe(400);
     expect(
       (
-        await f.call("staff", {
+        await f.roleCall({
           propertyId: "demo-1",
           userId: f.a3.id,
           department: "Housekeeping",
@@ -380,7 +380,7 @@ describe("local Housekeeping assignments", () => {
     expect(
       (await attendant(date, ["202"], f.a1.id, f.s1.id, f.s1)).statusCode,
     ).toBe(403);
-    await f.ok("staff", {
+    await f.roleOk({
       propertyId: "demo-1",
       userId: f.s1.id,
       department: "Housekeeping",
@@ -410,8 +410,7 @@ describe("local Housekeeping assignments", () => {
     ).toBe(403);
     expect(
       (
-        await f.call(
-          "staff",
+        await f.roleCall(
           {
             propertyId: "demo-1",
             userId: f.a1.id,
@@ -442,7 +441,7 @@ describe("local Housekeeping assignments", () => {
     ).toBe(403);
   });
   it("supports an HK Manager from existing housekeeping membership and denies privilege self-grants", async () => {
-    await f.ok("staff", {
+    await f.roleOk({
       propertyId: "demo-1",
       userId: "demo-housekeeping",
       department: "Housekeeping",
@@ -469,8 +468,7 @@ describe("local Housekeeping assignments", () => {
     ).toBe(200);
     expect(
       (
-        await f.call(
-          "staff",
+        await f.roleCall(
           {
             propertyId: "demo-1",
             userId: f.s1.id,

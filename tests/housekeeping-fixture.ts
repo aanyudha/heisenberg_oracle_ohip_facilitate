@@ -73,18 +73,36 @@ export async function housekeepingFixture(
         email,
         password: "Isolated-HK-test-password!",
         role: "housekeeping",
+        hkRole: role,
         properties,
       },
     });
     if (r.statusCode !== 200) throw Error(r.body);
-    if (properties.includes("demo-1"))
-      await ok("staff", {
-        propertyId: "demo-1",
-        userId: r.json().id,
-        department: "Housekeeping",
-        jobRole: role,
-      });
     return login(email);
+  }
+  async function roleCall(
+    body: {
+      userId: string;
+      propertyId: string;
+      jobRole: string;
+      canManage?: boolean;
+      department?: string;
+    },
+    auth = admin,
+  ) {
+    const { userId, ...payload } = body;
+    return app.inject({
+      method: "PATCH",
+      url: "/api/admin/users/" + userId + "/housekeeping",
+      remoteAddress: `127.3.${Math.floor(counter / 250)}.${(counter++ % 250) + 1}`,
+      headers: { cookie: auth.cookie, "x-csrf-token": auth.csrf },
+      payload,
+    });
+  }
+  async function roleOk(body: Parameters<typeof roleCall>[0], auth = admin) {
+    const r = await roleCall(body, auth);
+    if (r.statusCode !== 200) throw Error(r.body);
+    return r.json();
   }
   const s1 = await staff("Supervisor One", "supervisor"),
     s2 = await staff("Supervisor Two", "supervisor");
@@ -155,6 +173,8 @@ export async function housekeepingFixture(
     other,
     it,
     login,
+    roleCall,
+    roleOk,
     call,
     ok,
     plan,
