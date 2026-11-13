@@ -50,7 +50,21 @@ Overview statuses describe OPERA **now**, not a reconstructed historical snapsho
 
 Staff come from existing `users`, active tenant memberships and property grants, with the existing Housekeeping department/job metadata. There is no second user registry. An explicitly unavailable schedule blocks new assignments. Otherwise, a valid registered staff member may start a worksheet immediately; the first write creates that date/shift's Available schedule and resolves coverage locally. An existing shift and one-time property staff-role configuration are still required. Those administrative controls are separate from the daily worksheet.
 
-New feed rooms do not require manual room/floor entry. If assigning one needs a legacy directory entry, the backend materializes the verified feed location with `location_source=OHIP`; it does not create an Oracle room or a fake OPERA snapshot row. Missing location remains unavailable. Existing validated local directory overrides and per-room credit configuration are preserved. The configuration page remains the place for deliberate validated location/credit changes, subject to existing coverage safeguards.
+New feed rooms do not require manual room/floor entry. If assigning one needs a legacy directory entry, the backend materializes the verified feed location with `location_source=OHIP`; it does not create an Oracle room or a fake OPERA snapshot row. Missing location remains unavailable. Existing validated local mappings and per-room credit configuration are preserved; local floor mapping applies only when OHIP has no floor. The configuration page remains the place for deliberate validated location/credit changes, subject to existing coverage safeguards.
+
+## Floor → Supervisor → Room Attendant (2026-11-13)
+
+The existing worksheet now includes **Floor Assignment**: Floor, Total Rooms, Supervisor, Assigned, Unassigned and Workload Credits. A manager selects a primary supervisor in one row, or selects multiple floors and assigns them together. Empty supervisor cells identify floors without a primary supervisor. These changes use the existing debounce, rollback, undo and WebSocket flow; no daily setup page is required.
+
+Primary floor responsibility is scoped by tenant, property, business date and shift. One floor has one primary supervisor in that scope. The worksheet API rejects duplicate primary ownership unless a manager explicitly requests replacement. The legacy supervisor API also rejects duplicate primary floors, even when a floor currently has no rooms. Shared tenant/property transaction locks serialize these checks; the existing database unique index continues to protect active room assignments.
+
+Supervisors see **My Floors**, **My Attendants**, Unassigned Rooms, Assigned Rooms and Total Credits. A valid active/available supervisor with assigned floor or room responsibility can manage rooms in that effective scope without an extra daily authorization form. They may add an eligible, active, available, property-authorized registered attendant who has no team in this date/shift. Dropping a room on that attendant saves the team link and room assignment together. They cannot take another supervisor's attendant, assign floors, create exceptions, or move rooms outside their own responsibility. Existing explicit management permission remains supported.
+
+Changing a floor's primary supervisor preserves existing active room assignments, attendant team links, local progress and audit history. Those rooms remain with their existing team as visible room-specific exceptions. Newly unassigned rooms follow the new primary supervisor. A manager may deliberately move the attendant/team or rooms to transfer the retained work. Optional room-specific coverage controls are tucked inside the selected-room actions. An exception belonging to assigned work cannot be silently redirected to a different team. Undo restores floor ownership and exceptions without deleting room work.
+
+Floor values use the actual OHIP field first. A validated local room-directory floor is used only when OHIP supplies no floor. Numbers are never parsed to infer floors, and missing locations stay missing. New verified rooms on an assigned floor automatically appear in its supervisor's scope. Legacy room coverage and historical assignments remain compatible; no synthetic live room is created.
+
+Migrations **0004 and 0005 are reused unchanged**. Primary floors, explicit room exceptions and effective coverage use the existing supervisor-assignment JSON fields. Existing worksheet history stores the supervisor metadata needed for undo. No migration, duplicate user registry or parallel assignment structure is added by this enhancement.
 
 ## Autosave, conflicts and history
 
@@ -78,6 +92,8 @@ Configured attendants landing at `/` go directly to **My Worksheet** and see onl
 
 **Print Worksheet** opens an in-browser preview for the whole authorized worksheet, independent of screen filters. It includes hotel/date/shift, supervisor, attendant, floors/rooms, OPERA status, task, credit provenance, remarks, local progress and totals for both attendant and supervisor. Managers also receive an unassigned-room report. Page breaks start a new attendant; long room lists can continue to another A4 portrait page with repeating table headers. Print CSS uses wrapping cells, fixed column proportions and no clipped scroll containers. Print / Save PDF calls `window.print()`; there is no external PDF service or guest-data export.
 
+The preview now offers two modes from the same **Print Worksheet** button. **Supervisor Master Worksheet** starts a separate report per supervisor, listing assigned floors and per-floor totals, attendants and their room/task/status/credits, unassigned covered rooms, exceptions and supervisor totals. Managers also receive rooms without a supervisor. **Attendant Worksheet** starts each attendant on a separate page with remarks and signature areas; attendants can print only their own worksheet. Both modes show the last successfully saved assignment revision/time, room snapshot source/time and a STALE indicator when appropriate. Opening print waits for successful autosave and does not print optimistic pending state. Long tables may continue onto another page; repeating headers and non-splitting room rows keep them readable.
+
 ## API and schema
 
 | Route | Method | Contract |
@@ -86,7 +102,7 @@ Configured attendants landing at `/` go directly to **My Worksheet** and see onl
 | `/api/local-housekeeping/worksheet` | PUT | Scope + `baseRevision,mutationId,operations` |
 | `/api/local-housekeeping/worksheet/undo` | POST | Scope + `baseRevision,mutationId,changeId`; own last unchanged move only |
 
-Operations are `{type:"rooms",roomIds:[...],attendantId:string|null}` or `{type:"team",attendantId,supervisorId}`. Null releases rooms locally. Manager/administrative RBAC can regroup attendants and transfer coverage. Authorized supervisors can change rooms only within their existing team/coverage; they cannot take another supervisor's attendant or room. Room attendants are read-only. Every route derives tenant from the session; client tenant overrides are rejected. Writes retain session, CSRF, origin and rate-limit protection.
+Operations include `{type:"rooms",roomIds:[...],attendantId:string|null}`, `{type:"team",attendantId,supervisorId}`, `{type:"floors",floorIds:[...],supervisorId:string|null,replace?:boolean}` and `{type:"coverage",roomIds:[...],supervisorId:string|null}`. Floor and exception operations require manager/administrative RBAC. `replace` defaults to false; the manager UI explicitly requests replacement and explains retained work. Null releases the selected local assignment or coverage. Authorized supervisors can change rooms only within their own effective responsibility; they cannot take another supervisor's attendant or room. Room attendants are read-only. Every route derives tenant from the session; client tenant overrides are rejected. Writes retain session, CSRF, origin and rate-limit protection.
 
 The earlier `/setup`, `/staff`, `/shifts`, `/directory`, `/schedules`, `/supervisors`, `/attendants`, `/progress/:id` and `/board` APIs remain, with their existing RBAC and semantics. They are not Oracle forwarding endpoints. Direct Oracle/proxy namespaces and `/api/housekeeping` mutation guards remain blocked.
 
@@ -105,23 +121,27 @@ npm.cmd run test:housekeeping-smoke
 
 The browser smoke serves compiled React assets through an isolated source Fastify app, uses random loopback ports and disposable PGlite, and tests real native drag/drop, batch moves, autosave/rollback, manager conflicts, undo, source updates, mobile own/team visibility, WebSocket reassignment, filters, preview and real A4 PDF output. It uses separate browser actors while retaining the application's existing per-IP rate limit. It does not edit `.env`, use owner databases, restart owner processes or deploy production. The unchanged deployment scripts that temporarily edit `.env` are not used by this smoke.
 
-Artifacts: `artifacts/housekeeping-desktop.png`, `housekeeping-mobile.png`, `housekeeping-attendant-mobile.png`, `housekeeping-print-preview.png`, `housekeeping-worksheet.pdf` and `housekeeping-smoke.json`.
+Artifacts: `artifacts/housekeeping-desktop.png`, `housekeeping-mobile.png`, `housekeeping-attendant-mobile.png`, `housekeeping-print-preview.png`, `housekeeping-supervisor-master.pdf`, `housekeeping-worksheet.pdf` and `housekeeping-smoke.json`.
 
 The HSK source contract and permission/error paths are tested with synthetic transport responses. Live Oracle entitlement, live property pagination/task-credit behavior, external PostgreSQL and Docker remain separate acceptance checks; successful local tests are not production evidence. No push or production deployment is performed.
 
-### Local acceptance — 2026-11-12
+### Local acceptance — 2026-11-13
 
 | Check | Result |
 | --- | --- |
 | ESLint | PASS |
 | TypeScript / React production build / Fastify bundle | PASS |
-| Existing and new tests | PASS — 189 tests in 14 files |
-| Isolated Chrome/Playwright worksheet smoke | PASS — 26 checks, zero browser page errors |
+| Existing and new tests | PASS — 202 tests in 15 files |
+| Isolated Chrome/Playwright worksheet smoke | PASS — 33 checks, zero browser page errors |
 | Desktop 1440×1000 / mobile 390×844 | PASS — manager and attendant layouts have no page-level horizontal overflow |
 | Native drag/drop, batch moves, debounce, rollback, undo, user conflicts | PASS |
 | My Worksheet / My Team and scoped WebSocket reassignment | PASS |
+| Single/bulk primary floors, duplicate ownership rejection, supervisor own scope and safe replacement | PASS |
+| Supervisor Master and Attendant modes, saved revision, snapshot STALE and signatures | PASS |
 | Print preview, unclipped tables and actual A4 portrait PDF with attendant page breaks | PASS |
 | OPERA contract mapping, smaller server pagination, safe GET policy and no synthetic live fallback | PASS with synthetic authorized transport |
 | Live OPERA entitlement / real hotel responses | NOT TESTED |
 | External PostgreSQL / Docker acceptance for this change | NOT TESTED |
 | Owner DB migration, owner runtime restart, push or production deployment | NOT PERFORMED |
+
+Current enhancement files: `apps/api/src/housekeeping-worksheet.ts`, `apps/api/src/housekeeping.ts`, `packages/contracts/src/index.ts`, `packages/contracts/src/housekeeping.ts`, `apps/web/src/pages/FloorAssignment.tsx`, `apps/web/src/pages/HousekeepingWorksheet.tsx`, `apps/web/src/pages/HousekeepingWorksheet.css`, `apps/web/src/pages/WorksheetPrint.tsx`, `apps/web/src/worksheet-model.ts`, `tests/floors.test.ts`, `tests/worksheet.test.ts`, `tests/worksheet-frontend.test.tsx`, `scripts/housekeeping-smoke.ts`, this guide and `CHANGELOG.md`.

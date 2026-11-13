@@ -8,6 +8,103 @@
   top: auto;
   z-index: auto;
 }
+.worksheet-floor-assignment {
+  padding: 16px;
+  border: 1px solid var(--worksheet-line);
+  border-radius: 10px;
+  background: #fff;
+  margin: 18px 0;
+}
+.worksheet-floor-title h2 {
+  font-size: 17px;
+  margin: 0 0 6px;
+}
+.worksheet-floor-title p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--worksheet-muted);
+  margin: 0 0 12px;
+}
+.worksheet-floor-assignment table {
+  min-width: 680px;
+  width: 100%;
+}
+.worksheet-floor-assignment td {
+  padding: 10px;
+  vertical-align: top;
+}
+.worksheet-floor-assignment td small {
+  display: block;
+  max-width: 190px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--worksheet-muted);
+  margin-top: 5px;
+}
+.worksheet-floor-assignment input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+  margin-right: 8px;
+  accent-color: #17675d;
+}
+.worksheet-floor-assignment select {
+  max-width: 220px;
+  padding: 7px;
+  border: 1px solid var(--worksheet-line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.worksheet-exception-tools {
+  font-size: 11px;
+  width: 100%;
+}
+.worksheet-exception-tools summary {
+  cursor: pointer;
+  padding: 7px 0;
+}
+.worksheet-exception-tools small {
+  display: block;
+  margin-top: 6px;
+}
+.worksheet-scope-label {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--worksheet-muted);
+  margin: 6px 0;
+}
+.worksheet-print-signatures {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 15px;
+  margin-top: 30px;
+  break-inside: avoid;
+}
+.worksheet-print-signatures span {
+  display: block;
+  height: 25px;
+  border-bottom: 1px solid #83978b;
+}
+.worksheet-print-stale {
+  color: #8c351d;
+  border: 1px solid #b46548;
+  padding: 2px 5px;
+}
+.worksheet-print-team h3 {
+  break-after: avoid;
+}
+.worksheet-preview-toolbar label {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font-size: 12px;
+}
+.worksheet-preview-toolbar select {
+  max-width: 100%;
+  padding: 7px;
+  border: 1px solid #ccd9d4;
+  border-radius: 6px;
+}
 .worksheet-heading {
   padding: 0;
   background: transparent;

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased - Floor / Supervisor / Attendant worksheet (2026-11-13)
+
+- Extended the existing worksheet with single/bulk primary floor assignment, per-floor workload and visible room-specific exceptions. Supervisor replacement preserves active attendant work and local progress; undo restores responsibility safely.
+- Added My Floors and My Attendants with automatic own-floor room scope, eligible registered unallocated attendants, atomic team/room autosave and backend cross-floor/team restrictions. Existing optimistic rollback, concurrency checks, audit and Fastify WebSocket reconciliation remain in use.
+- Added Supervisor Master and Attendant print modes from the existing preview, per-floor/supervisor totals, unassigned rooms, attendant signatures, saved revision/time, snapshot provenance and STALE indicators. Browser print/Save PDF remains A4 portrait without an external service.
+- Reused migrations 0004/0005 and existing assignment/history tables unchanged. OHIP floor values take priority over validated local fallback; no room-number inference, synthetic live rooms, duplicate user registry or Oracle mutation was introduced.
+- Expanded disposable API/frontend/browser regressions for floor ownership, safe replacement, supervisor scope, registered staff, workload, undo, conflicts, both print modes, mobile and realtime. No production push/deployment or owner database migration.
+
 ## Unreleased - Housekeeping Worksheet UX (2026-11-12)
 
 - Replaced the daily multi-form rooms assignment UI with one drag/drop worksheet: unassigned lane, registered supervisor groups, attendants, multi-select assignment, filters, debounced local autosave, optimistic totals, rollback and undo.

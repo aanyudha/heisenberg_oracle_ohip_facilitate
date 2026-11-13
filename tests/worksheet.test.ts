@@ -439,7 +439,12 @@ describe("single-screen worksheet backend", () => {
     });
     const own = await sheet(day, f.s1);
     expect(own.rooms.map((r: any) => r.id)).toEqual(["201", "202"]);
-    expect(own.attendants.map((r: any) => r.id)).toEqual([f.a1.id]);
+    expect(
+      own.attendants
+        .filter((r: any) => own.team[r.id] === f.s1.id)
+        .map((r: any) => r.id),
+    ).toEqual([f.a1.id]);
+    expect(own.attendants.map((r: any) => r.id)).not.toContain(f.a2.id);
     expect(
       (
         await move(
@@ -628,6 +633,33 @@ describe("authorized OPERA room feed", () => {
     expect(
       (await sheet()).rooms.find((r: any) => r.id === "V101"),
     ).toMatchObject({ credits: 4, creditSource: "OHIP" });
+    await f.ok("directory", {
+      propertyId: "demo-1",
+      roomId: "V104",
+      floor: "Incorrect local floor",
+      departureCredits: 1,
+      stayoverCredits: 1,
+      otherCredits: 0,
+      validated: true,
+    });
+    await f.ok("directory", {
+      propertyId: "demo-1",
+      roomId: "V103",
+      floor: "Validated roof",
+      departureCredits: 1,
+      stayoverCredits: 1,
+      otherCredits: 0,
+      validated: true,
+    });
+    const mapped = await sheet();
+    expect(mapped.rooms.find((r: any) => r.id === "V104")).toMatchObject({
+      floor: "Upper",
+      floorSource: "OHIP",
+    });
+    expect(mapped.rooms.find((r: any) => r.id === "V103")).toMatchObject({
+      floor: "Validated roof",
+      floorSource: "local_validated",
+    });
   });
   it("shows an explicit live error instead of local Unknown mappings when OHIP authorization fails", async () => {
     overviewStatus = 403;

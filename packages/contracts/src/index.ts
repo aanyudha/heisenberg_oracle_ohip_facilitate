@@ -42,12 +42,41 @@ export type WorksheetStaff = {
 };
 export type WorksheetOperation =
   | { type: "rooms"; roomIds: string[]; attendantId: string | null }
-  | { type: "team"; attendantId: string; supervisorId: string };
+  | { type: "team"; attendantId: string; supervisorId: string }
+  | {
+      type: "floors";
+      floorIds: string[];
+      supervisorId: string | null;
+      replace?: boolean;
+    }
+  | { type: "coverage"; roomIds: string[]; supervisorId: string | null };
+export type WorksheetFloor = {
+  id: string;
+  supervisorId: string | null;
+  totalRooms: number;
+  assignedRooms: number;
+  unassignedRooms: number;
+  credits: number;
+  missingCredits: number;
+  exceptionRooms: number;
+  conflict: boolean;
+};
+export type SupervisorCoverage = {
+  supervisorId: string;
+  floors: string[];
+  rooms: string[];
+  coverage: string[];
+};
+export {
+  resolveWorksheetCoverage,
+  worksheetFloorRows,
+} from "./housekeeping.js";
 export type Worksheet = {
   scope: WorksheetScope;
   property: { id: string; name: string };
   shift: { id: string; name: string };
   revision: string;
+  savedAt?: string | null;
   selfRole: string | null;
   manager: boolean;
   canManage: boolean;
@@ -64,9 +93,14 @@ export type Worksheet = {
     error: string | null;
     taskError: string | null;
     syncedAt: string | null;
+    stale?: boolean;
   };
   missingAssignedRooms: number;
   warnings: string[];
+  floorAssignments?: WorksheetFloor[];
+  supervisorFloors?: Record<string, string[]>;
+  roomSupervisors?: Record<string, string | null>;
+  roomExceptions?: Record<string, string>;
 };
 export type Property = {
   id: string;

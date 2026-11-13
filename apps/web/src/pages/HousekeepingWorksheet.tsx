@@ -21,6 +21,7 @@ import { State, Empty, Badge } from "../components";
 import { useWorksheetAutosave } from "../useWorksheetAutosave";
 import { workload } from "../worksheet-model";
 import WorksheetPrint from "./WorksheetPrint";
+import FloorAssignment from "./FloorAssignment";
 import "./HousekeepingWorksheet.css";
 
 type Setup = {
@@ -73,7 +74,7 @@ function WorksheetBoard({
   shifts: Setup["shifts"];
   setShift: (id: string) => void;
 }) {
-  const { propertyId, date } = useWorkspace();
+  const { propertyId, date, user } = useWorkspace();
   const query = useData<Worksheet>(
     ["housekeeping", propertyId, date, shiftId, "worksheet"],
     `/local-housekeeping/worksheet?${new URLSearchParams({ propertyId, date, shiftId })}`,
@@ -85,6 +86,7 @@ function WorksheetBoard({
     [status, setStatus] = useState(""),
     [roomType, setRoomType] = useState(""),
     [target, setTarget] = useState(""),
+    [exceptionTarget, setExceptionTarget] = useState(""),
     [preview, setPreview] = useState(false);
   const [dragOver, setDragOver] = useState<string | null>(null);
   const eligible =
@@ -92,10 +94,14 @@ function WorksheetBoard({
       (a) =>
         a.active &&
         a.available &&
-        sheet.team[a.id] &&
-        sheet.supervisors.some(
-          (s) => s.id === sheet.team[a.id] && s.active && s.available,
-        ),
+        ((sheet.team[a.id] &&
+          sheet.supervisors.some(
+            (s) => s.id === sheet.team[a.id] && s.active && s.available,
+          )) ||
+          (!sheet.manager &&
+            sheet.selfRole === "supervisor" &&
+            !sheet.team[a.id] &&
+            sheet.canManage)),
     ) || [];
   const assigned = (uid: string) =>
     sheet?.rooms.filter((r) => sheet.assignments[r.id] === uid) || [];
@@ -118,6 +124,17 @@ function WorksheetBoard({
           )[status]
         : r.status === status));
   const change = (op: WorksheetOperation) => {
+    if (
+      op.type === "rooms" &&
+      op.attendantId &&
+      sheet?.selfRole === "supervisor" &&
+      !sheet.team[op.attendantId]
+    )
+      move({
+        type: "team",
+        attendantId: op.attendantId,
+        supervisorId: user.id,
+      });
     move(op);
     setSelected([]);
   };
@@ -305,7 +322,7 @@ function WorksheetBoard({
         onDragOver={(event) => {
           if (
             sheet?.canManage &&
-            sheet.team[id] &&
+            eligible.some((a) => a.id === id) &&
             event.dataTransfer.types.includes(
               "application/x-housekeeping-rooms",
             )
@@ -363,6 +380,23 @@ function WorksheetBoard({
                 ))}
             </select>
           )}
+          {!sheet?.manager &&
+            sheet?.selfRole === "supervisor" &&
+            sheet.canManage &&
+            !sheet.team[id] && (
+              <button
+                disabled={!att.active || !att.available}
+                onClick={() =>
+                  change({
+                    type: "team",
+                    attendantId: id,
+                    supervisorId: user.id,
+                  })
+                }
+              >
+                Add {att.name} to My Team
+              </button>
+            )}
           {!compact && metrics(rooms, true)}
         </header>
         {!compact && (
@@ -493,6 +527,9 @@ function WorksheetBoard({
             </section>
           ) : (
             <>
+              {(sheet.manager || sheet.selfRole === "supervisor") && (
+                <FloorAssignment sheet={sheet} move={change} />
+              )}
               <div className="worksheet-summary">
                 <div>
                   <span>Total rooms</span>
@@ -517,6 +554,29 @@ function WorksheetBoard({
                     {sheet.rooms.filter((r) => r.priority).length}
                   </strong>
                 </div>
+                {sheet.selfRole === "supervisor" && (
+                  <>
+                    <div>
+                      <span>Assigned Rooms</span>
+                      <strong>
+                        {
+                          sheet.rooms.filter((r) => sheet.assignments[r.id])
+                            .length
+                        }
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Total Credits</span>
+                      <strong>
+                        {
+                          workload(
+                            sheet.rooms.filter((r) => sheet.assignments[r.id]),
+                          ).credits
+                        }
+                      </strong>
+                    </div>
+                  </>
+                )}
               </div>
               <div className="worksheet-toolbar">
                 <label>
@@ -642,6 +702,47 @@ function WorksheetBoard({
                   <button onClick={() => setSelected([])}>
                     Clear selection
                   </button>
+                  {sheet.manager && (
+                    <details className="worksheet-exception-tools">
+                      <summary>Room-specific supervisor exception</summary>
+                      <select
+                        aria-label="Room exception supervisor"
+                        value={exceptionTarget}
+                        onChange={(e) => setExceptionTarget(e.target.value)}
+                      >
+                        <option value="">Choose supervisor</option>
+                        <option value="primary">
+                          Use primary floor supervisor
+                        </option>
+                        {sheet.supervisors
+                          .filter((s) => s.active && s.available)
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                      </select>
+                      <button
+                        disabled={!exceptionTarget}
+                        onClick={() =>
+                          change({
+                            type: "coverage",
+                            roomIds: selected,
+                            supervisorId:
+                              exceptionTarget === "primary"
+                                ? null
+                                : exceptionTarget,
+                          })
+                        }
+                      >
+                        Apply room exception
+                      </button>
+                      <small>
+                        Existing assigned work remains with its team. Move the
+                        room or attendant first to change its supervisor.
+                      </small>
+                    </details>
+                  )}
                 </div>
               )}
               <div
@@ -689,12 +790,14 @@ function WorksheetBoard({
                   </section>
                 )}
                 <div className="worksheet-supervisors">
-                  {sheet.manager &&
+                  {sheet.canManage &&
                     sheet.attendants.some((a) => !sheet.team[a.id]) && (
                       <section className="worksheet-roster">
                         <h2>Available Attendants</h2>
                         <p>
-                          Drag into a supervisor group, or choose a supervisor.
+                          {sheet.manager
+                            ? "Drag into a supervisor group, or choose a supervisor."
+                            : "Choose an available registered attendant, or drop a room onto their card to add them to My Team."}
                         </p>
                         <div>
                           {sheet.attendants
@@ -724,8 +827,18 @@ function WorksheetBoard({
                       <header>
                         <div>
                           <Users size={19} />
-                          <h2>{spv.name}</h2>
+                          <h2>
+                            {sheet.selfRole === "supervisor"
+                              ? "My Attendants"
+                              : spv.name}
+                          </h2>
                         </div>
+                        {sheet.selfRole === "supervisor" && <p>{spv.name}</p>}
+                        <p className="worksheet-scope-label">
+                          Assigned floors:{" "}
+                          {sheet.supervisorFloors?.[spv.id]?.join(", ") ||
+                            "Room-specific coverage"}
+                        </p>
                         {metrics(
                           sheet.rooms.filter(
                             (r) =>

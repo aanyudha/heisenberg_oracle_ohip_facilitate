@@ -104,35 +104,111 @@ try {
         .count()) === 0,
     "Main screen has no setup wizard or assignment forms",
   );
-  // Keep both ends visible before the native gesture, so target auto-scroll
-  // cannot put a different card under Chromium's initial pointer position.
-  await page.locator('.worksheet-board').evaluate(el=>el.scrollIntoView({block:'start'}));
-  await page.evaluate(()=>window.scrollBy(0,-90));
+  const earlyContext = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+  });
+  const [earlyCookieName, earlyCookieValue] = f.s1.cookie.split("=");
+  await earlyContext.addCookies([
+    { name: earlyCookieName, value: earlyCookieValue, url: f.base },
+  ]);
+  const earlySupervisor = await earlyContext.newPage();
+  let earlyRevision = "";
+  earlySupervisor.on("response", async (response) => {
+    if (
+      response.request().method() === "GET" &&
+      response.url().includes("/api/local-housekeeping/worksheet?") &&
+      response.ok()
+    ) {
+      earlyRevision = (await response.json()).revision;
+    }
+  });
+  earlySupervisor.on("pageerror", (e) => errors.push(e.message));
+  await earlySupervisor.goto(f.base + "/");
+  await earlySupervisor
+    .getByRole("heading", { name: "My Team", exact: true })
+    .waitFor();
+  await earlySupervisor.getByLabel("Business date").fill(scope.date);
+  await earlySupervisor
+    .getByRole("region", { name: "My Floors", exact: true })
+    .waitFor();
+  await page.getByLabel("Select floor West", { exact: true }).check();
+  await page.getByLabel("Select floor East", { exact: true }).check();
+  await page.getByLabel("Batch floor supervisor").selectOption(f.s1.id);
   await page
-    .locator(`[data-attendant-id="${f.a1.id}"]>header`)
-    .dragTo(page.locator(`[data-supervisor-id="${f.s1.id}"]>header`), {
-      sourcePosition: { x: 20, y: 20 },
-    });
+    .getByRole("button", { name: "Assign selected floors", exact: true })
+    .click();
+  await until(async () => {
+    const s = await worksheet();
+    return (
+      s.supervisorFloors[f.s1.id]?.includes("West") &&
+      s.supervisorFloors[f.s1.id]?.includes("East")
+    );
+  }, "Primary floors were not saved");
   await until(
-    async () => (await worksheet()).team[f.a1.id] === f.s1.id,
-    "Attendant drag/drop was not saved",
+    async () => (await earlySupervisor.locator("[data-room-id]").count()) === 4,
+    "New supervisor floors did not arrive over WebSocket",
+  );
+  check(
+    (await earlySupervisor.locator('[data-room-id="205"]').count()) === 0,
+    "Supervisor sees only newly assigned floors over WebSocket without reload",
+  );
+  await page
+    .getByLabel("Supervisor for floor Annex", { exact: true })
+    .selectOption(f.s2.id);
+  await until(
+    async () =>
+      (await worksheet()).supervisorFloors[f.s2.id]?.includes("Annex"),
+    "Single-floor assignment was not saved",
   );
   checks.push(
-    "Drag attendant into supervisor group without daily schedule/coverage setup",
+    "Manager assigns one or multiple primary floors on the worksheet without setup forms",
   );
-  await page
+  const floorRevision = (await worksheet()).revision;
+  await until(
+    async () => earlyRevision === floorRevision,
+    "Supervisor did not receive the current saved floor revision",
+  );
+  await earlySupervisor.bringToFront();
+  await earlySupervisor
+    .locator(".worksheet-board")
+    .evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await earlySupervisor.evaluate(() => window.scrollBy(0, -90));
+  await earlySupervisor
     .locator('[data-room-id="201"]')
     .dragTo(
-      page.locator(
-        `[data-attendant-id="${f.a1.id}"]>header`,
-      ),
-      {sourcePosition:{x:50,y:20},targetPosition:{x:20,y:20}},
+      earlySupervisor.locator(`[data-attendant-id="${f.a1.id}"]>header`),
+      { sourcePosition: { x: 50, y: 20 }, targetPosition: { x: 20, y: 20 } },
     );
+  try {
+    await until(async () => {
+      const s = await worksheet();
+      return s.assignments["201"] === f.a1.id && s.team[f.a1.id] === f.s1.id;
+    }, "Supervisor room drag/drop was not saved");
+  } catch (error) {
+    console.log(
+      "Supervisor diagnostic",
+      await earlySupervisor.locator("body").innerText(),
+    );
+    await earlySupervisor.screenshot({
+      path: "artifacts/housekeeping-supervisor-diagnostic.png",
+      fullPage: true,
+    });
+    throw error;
+  }
   await until(
-    async () => (await worksheet()).assignments["201"] === f.a1.id,
-    "Room drag/drop was not saved",
+    async () =>
+      (await page!
+        .locator(
+          `[data-supervisor-id="${f.s1.id}"] [data-attendant-id="${f.a1.id}"]`,
+        )
+        .count()) === 1,
+    "Manager did not receive the supervisor assignment event",
   );
-  checks.push("Drag room to attendant with local debounced autosave");
+  checks.push(
+    "Supervisor drags a room to a registered attendant with atomic team/room autosave and no manual floor selection",
+  );
+  await earlyContext.close();
+  await page.bringToFront();
   await page.getByLabel("Select room 202", { exact: true }).check();
   await page.getByLabel("Select room 203", { exact: true }).check();
   await page.getByLabel("Batch assign to").selectOption(f.a1.id);
@@ -184,6 +260,30 @@ try {
     "Undo did not update browser",
   );
   checks.push("Undo restores the last persisted move and reconciles the board");
+  await page
+    .getByLabel("Supervisor for floor West", { exact: true })
+    .selectOption(f.s2.id);
+  await until(
+    async () =>
+      (await worksheet()).floorAssignments.find((r: any) => r.id === "West")
+        ?.supervisorId === f.s2.id,
+    "Floor replacement was not saved",
+  );
+  check(
+    (await worksheet()).assignments["201"] === f.a1.id &&
+      (await worksheet()).roomExceptions["201"] === f.s1.id,
+    "Manager floor replacement preserves active attendant work as visible room exceptions",
+  );
+  await page.getByRole("button", { name: "Undo last move" }).click();
+  await until(
+    async () =>
+      (await worksheet()).floorAssignments.find((r: any) => r.id === "West")
+        ?.supervisorId === f.s1.id,
+    "Floor undo did not restore primary supervisor",
+  );
+  checks.push(
+    "Undo restores floor ownership without deleting room work or audit history",
+  );
   // Hold autosave so a second manager deterministically wins the revision race.
   let release!: () => void, intercepted!: () => void;
   const held = new Promise<void>((r) => (release = r)),
@@ -286,6 +386,11 @@ try {
   const preview = page.getByRole("dialog", { name: "Worksheet print preview" });
   await preview.waitFor();
   check(
+    (await preview.locator(".worksheet-print-master").count()) === 2 &&
+      (await preview.locator(".worksheet-print-floor-totals").count()) >= 2,
+    "Supervisor Master Sheet includes assigned floors, floor totals and separate supervisor reports",
+  );
+  check(
     (await preview
       .getByText("Attendant: Attendant One", { exact: true })
       .count()) === 1 &&
@@ -307,6 +412,29 @@ try {
     path: "artifacts/housekeeping-print-preview.png",
     fullPage: true,
   });
+  const masterPdf = await page.pdf({
+    path: "artifacts/housekeeping-supervisor-master.pdf",
+    format: "A4",
+    preferCSSPageSize: true,
+    printBackground: true,
+  });
+  check(
+    (masterPdf.toString("latin1").match(/\/Type\s*\/Page\b/g) || []).length >=
+      3,
+    "Master PDF separates supervisors and includes the unallocated-room report",
+  );
+  const savedRevision = (await worksheet()).revision;
+  check(
+    (await preview.locator(".worksheet-print").innerText()).includes(
+      `Saved assignment revision: ${savedRevision}`,
+    ),
+    "Print uses the latest successfully saved assignment revision",
+  );
+  await preview.getByLabel("Worksheet print mode").selectOption("attendant");
+  check(
+    (await preview.locator(".worksheet-print-signatures").count()) === 2,
+    "Attendant print mode supplies signature areas and its own pages",
+  );
   const pdf = await page.pdf({
     path: "artifacts/housekeeping-worksheet.pdf",
     format: "A4",
@@ -360,6 +488,15 @@ try {
     path: "artifacts/housekeeping-desktop.png",
     fullPage: true,
   });
+  // Browser actors share one loopback IP. Keep production rate limiting intact
+  // and start mobile acceptance in the next window after desktop activity.
+  const remaining = 65000 - (Date.now() - began);
+  if (remaining > 0) {
+    console.log(
+      "Waiting for the unchanged API rate-limit window before mobile actors",
+    );
+    await new Promise((r) => setTimeout(r, Math.min(remaining, 55000)));
+  }
   const own = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });
@@ -399,22 +536,6 @@ try {
     path: "artifacts/housekeeping-attendant-mobile.png",
     fullPage: true,
   });
-  await f.ok("staff", {
-    propertyId: "demo-1",
-    userId: f.s1.id,
-    department: "Housekeeping",
-    jobRole: "supervisor",
-    canManage: true,
-  });
-  // Three fresh browser contexts share one loopback IP. Preserve the production
-  // rate limit and pace the last actor into the next window instead of disabling it.
-  const remaining = 65000 - (Date.now() - began);
-  if (remaining > 0) {
-    console.log(
-      "Waiting for the unchanged API rate-limit window before the supervisor browser actor",
-    );
-    await new Promise((r) => setTimeout(r, Math.min(remaining, 55000)));
-  }
   const team = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });

@@ -354,9 +354,18 @@ export function registerHousekeeping(
         await scheduled(tx, u, b, b.supervisorId, "supervisor");
       const others = (
         await tx.execute(
-          sql`SELECT coverage FROM housekeeping_supervisor_assignments WHERE ${where(u, b)} AND supervisor_id!=${b.supervisorId}`,
+          sql`SELECT floors,coverage FROM housekeeping_supervisor_assignments WHERE ${where(u, b)} AND supervisor_id!=${b.supervisorId}`,
         )
       ).rows as Row[];
+      if (
+        others.some((r) =>
+          r.floors.some((floor: string) => b.floors.includes(floor)),
+        )
+      )
+        throw fail(
+          409,
+          "Floor already has a primary supervisor for this date and shift",
+        );
       if (
         others.some((r) =>
           r.coverage.some((room: string) => coverage.includes(room)),

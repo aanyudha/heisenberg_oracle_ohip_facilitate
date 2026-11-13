@@ -136,14 +136,16 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-function mount() {
+function mount(identity = user) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <Context.Provider value={{ user, propertyId: "p", date: "2026-11-12" }}>
+        <Context.Provider
+          value={{ user: identity, propertyId: "p", date: "2026-11-12" }}
+        >
           <HousekeepingWorksheet />
         </Context.Provider>
       </MemoryRouter>
@@ -156,6 +158,107 @@ async function ready() {
   await screen.findByRole("article", { name: "Room 201" });
 }
 describe("worksheet interaction and autosave", () => {
+  it("assigns selected floors in one optimistic autosave on the existing worksheet", async () => {
+    value.floorAssignments = value.rooms.map((r) => ({
+      id: r.floor!,
+      supervisorId: null,
+      totalRooms: 1,
+      assignedRooms: 0,
+      unassignedRooms: 1,
+      credits: r.credits!,
+      missingCredits: 0,
+      exceptionRooms: 0,
+      conflict: false,
+    }));
+    value.supervisorFloors = { s1: [] };
+    mount();
+    await ready();
+    fireEvent.click(screen.getByLabelText("Select floor West"));
+    fireEvent.click(screen.getByLabelText("Select floor East"));
+    fireEvent.change(screen.getByLabelText("Batch floor supervisor"), {
+      target: { value: "s1" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Assign selected floors" }),
+    );
+    expect(screen.getByLabelText("Supervisor for floor West")).toHaveValue(
+      "s1",
+    );
+    expect(screen.getByLabelText("Supervisor for floor East")).toHaveValue(
+      "s1",
+    );
+    expect(writes).toHaveLength(0);
+    await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
+    expect(writes[0].body.operations[0]).toMatchObject({
+      type: "floors",
+      floorIds: ["West", "East"],
+      supervisorId: "s1",
+      replace: true,
+    });
+  });
+  it("lets a floor supervisor select a registered attendant without manual floor setup", async () => {
+    value.selfRole = "supervisor";
+    value.manager = false;
+    value.team = {};
+    value.roomSupervisors = { "201": "s1", "202": "s1" };
+    value.supervisorFloors = { s1: ["West", "East"] };
+    value.floorAssignments = value.rooms.map((r) => ({
+      id: r.floor!,
+      supervisorId: "s1",
+      totalRooms: 1,
+      assignedRooms: 0,
+      unassignedRooms: 1,
+      credits: r.credits!,
+      missingCredits: 0,
+      exceptionRooms: 0,
+      conflict: false,
+    }));
+    mount({ ...user, id: "s1", role: "housekeeping" });
+    await screen.findByRole("heading", { name: "My Team" });
+    expect(
+      screen.getByRole("region", { name: "My Floors" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("Supervisor for floor West"),
+    ).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Assign room 201 to"), {
+      target: { value: "a1" },
+    });
+    await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
+    expect(writes[0].body.operations).toEqual([
+      { type: "team", attendantId: "a1", supervisorId: "s1" },
+      { type: "rooms", roomIds: ["201"], attendantId: "a1" },
+    ]);
+  });
+  it("prints master and attendant modes with saved revision, stale source and signatures", async () => {
+    value.assignments = { "201": "a1" };
+    value.supervisorFloors = { s1: ["West"] };
+    value.roomSupervisors = { "201": "s1", "202": "s1" };
+    value.feed.stale = true;
+    value.savedAt = "2026-11-12T02:00:00Z";
+    mount();
+    await ready();
+    fireEvent.click(screen.getByRole("button", { name: "Print Worksheet" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Worksheet print preview",
+    });
+    expect(dialog.querySelector(".worksheet-print-master")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Assigned floors: West");
+    expect(dialog).toHaveTextContent("Total per floor");
+    expect(dialog).toHaveTextContent("STALE");
+    expect(dialog).toHaveTextContent("Saved assignment revision: 1");
+    fireEvent.change(screen.getByLabelText("Worksheet print mode"), {
+      target: { value: "attendant" },
+    });
+    expect(
+      dialog.querySelector(".worksheet-print-master"),
+    ).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("Attendant signature");
+    expect(dialog).toHaveTextContent("Supervisor signature");
+    expect(dialog.querySelector(".worksheet-print-page")).toHaveTextContent(
+      "201",
+    );
+  });
   it("optimistically accepts a drag/drop and saves once after the debounce", async () => {
     mount();
     await ready();

@@ -7,6 +7,11 @@ import type {
   WorksheetRoom,
 } from "@hospitality/contracts";
 import { sql, type Database } from "./db.js";
+import {
+  resolveWorksheetCoverage,
+  worksheetFloorRows,
+  type SupervisorCoverage,
+} from "@hospitality/contracts";
 import type { Principal } from "./realtime.js";
 import {
   housekeepingFeed,
@@ -43,6 +48,20 @@ const fail = (statusCode: number, message: string) =>
 const where = (u: Principal, s: WorksheetScope) =>
   sql`tenant_id=${u.tenantId} AND property_id=${s.propertyId} AND business_date=${s.date} AND shift_id=${s.shiftId}`;
 type Plan = { supervisors: Row[]; attendants: Row[]; rooms: Row[] };
+const coverageRows = (rows: Row[]): SupervisorCoverage[] =>
+  rows.map((r) => ({
+    supervisorId: r.supervisor_id,
+    floors: r.floors || [],
+    rooms: r.rooms || [],
+    coverage: r.coverage || [],
+  }));
+const cloneSupervisors = (rows: Row[]): Row[] =>
+  rows.map((r) => ({
+    ...r,
+    floors: [...(r.floors || [])],
+    rooms: [...(r.rooms || [])],
+    coverage: [...(r.coverage || [])],
+  }));
 async function loadPlan(
   tx: Tx,
   u: Principal,
@@ -186,7 +205,8 @@ export function registerHousekeepingWorksheet(
                 ],
               )
             : null;
-      const override = d?.location_source === "local_validated" && d.floor;
+      const override =
+        !room.floor && d?.location_source === "local_validated" && d.floor;
       return {
         ...room,
         departure,
@@ -250,7 +270,9 @@ export function registerHousekeepingWorksheet(
           ? a.staff.filter((r) => r.job_role === "attendant")
           : a.self?.job_role === "supervisor"
             ? a.staff.filter(
-                (r) => r.job_role === "attendant" && team[r.user_id] === u.id,
+                (r) =>
+                  r.job_role === "attendant" &&
+                  (team[r.user_id] === u.id || !Object.hasOwn(team, r.user_id)),
               )
             : a.staff.filter(
                 (r) => r.user_id === u.id && r.job_role === "attendant",
@@ -311,18 +333,33 @@ export function registerHousekeepingWorksheet(
             .filter((r) => visibleAttendantIds.has(r.attendant_id))
             .map((r) => [r.room_id, r.local_status]),
         );
-        const coverage =
-          plan.supervisors.find((r) => r.supervisor_id === u.id)?.coverage ||
-          [];
         const allRooms = await enrich(tx, u, s, source);
+        const allAssignments = Object.fromEntries(
+          plan.rooms.map((r) => [r.room_id, r.attendant_id]),
+        );
+        const projection = resolveWorksheetCoverage(
+          coverageRows(plan.supervisors),
+          allRooms,
+          allAssignments,
+          team,
+        );
         const rooms = allRooms.filter(
           (r) =>
             a.manager ||
             (a.self?.job_role === "supervisor"
-              ? coverage.includes(r.id) || !!assignments[r.id]
+              ? projection.roomOwners[r.id] === u.id
               : assignments[r.id] === u.id),
         );
         const warnings: string[] = [];
+        if (projection.conflictFloors.length)
+          warnings.push(
+            "Conflicting primary supervisor assignment. Manager review required for floors: " +
+              projection.conflictFloors.join(", "),
+          );
+        if (a.manager && Object.keys(projection.roomExceptions).length)
+          warnings.push(
+            "Room-specific supervisor exceptions preserve existing work or explicit coverage. Review Floor Assignment before transferring a team.",
+          );
         const credits = attendants
           .filter((a) => a.active && a.available)
           .map((a) =>
@@ -353,13 +390,55 @@ export function registerHousekeepingWorksheet(
           property,
           shift,
           revision: await revision(tx, u, s.propertyId),
+          savedAt:
+            (
+              (
+                await tx.execute(
+                  sql`SELECT created_at FROM housekeeping_worksheet_changes WHERE ${where(u, s)} ORDER BY created_at DESC LIMIT 1`,
+                )
+              ).rows[0] as Row | undefined
+            )?.created_at || null,
           selfRole: a.manager ? "manager" : a.self?.job_role || null,
           manager: a.manager,
           canManage: !!(
             a.manager ||
-            (a.self?.job_role === "supervisor" && a.self.can_manage)
+            (a.self?.job_role === "supervisor" &&
+              schedules.find((r) => r.user_id === u.id)?.available !== false &&
+              (a.self.can_manage ||
+                rooms.length > 0 ||
+                plan.supervisors.some(
+                  (r) => r.supervisor_id === u.id && r.floors.length > 0,
+                )))
           ),
           rooms,
+          floorAssignments: worksheetFloorRows(
+            rooms,
+            assignments,
+            projection,
+            a.manager
+              ? plan.supervisors.flatMap((r) => r.floors)
+              : a.self?.job_role === "supervisor"
+                ? plan.supervisors.find((r) => r.supervisor_id === u.id)
+                    ?.floors || []
+                : [],
+          ),
+          supervisorFloors: Object.fromEntries(
+            [...visibleSupervisorIds].map((uid) => [
+              uid,
+              a.self?.job_role === "attendant"
+                ? [...new Set(rooms.map((r) => r.floor).filter(Boolean))]
+                : plan.supervisors.find((r) => r.supervisor_id === uid)
+                    ?.floors || [],
+            ]),
+          ),
+          roomSupervisors: Object.fromEntries(
+            rooms.map((r) => [r.id, projection.roomOwners[r.id] || null]),
+          ),
+          roomExceptions: Object.fromEntries(
+            rooms
+              .filter((r) => projection.roomExceptions[r.id])
+              .map((r) => [r.id, projection.roomExceptions[r.id]]),
+          ),
           supervisors,
           attendants,
           team: Object.fromEntries(
@@ -376,6 +455,11 @@ export function registerHousekeepingWorksheet(
             error: source.error,
             taskError: source.taskError,
             syncedAt: source.syncedAt,
+            stale:
+              source.source === "OHIP" &&
+              (source.status !== "synced" ||
+                !source.syncedAt ||
+                Date.now() - new Date(source.syncedAt).getTime() > 180000),
           },
           missingAssignedRooms: plan.rooms.filter(
             (r) =>
@@ -418,6 +502,35 @@ export function registerHousekeepingWorksheet(
             supervisorId: id,
           })
           .strict(),
+        z
+          .object({
+            type: z.literal("floors"),
+            floorIds: z
+              .array(id)
+              .min(1)
+              .max(1000)
+              .refine(
+                (v) => new Set(v).size === v.length,
+                "Duplicate floor selection",
+              ),
+            supervisorId: id.nullable(),
+            replace: z.boolean().default(false),
+          })
+          .strict(),
+        z
+          .object({
+            type: z.literal("coverage"),
+            roomIds: z
+              .array(id)
+              .min(1)
+              .max(1000)
+              .refine(
+                (v) => new Set(v).size === v.length,
+                "Duplicate room selection",
+              ),
+            supervisorId: id.nullable(),
+          })
+          .strict(),
       ]),
     )
     .min(1)
@@ -443,6 +556,7 @@ export function registerHousekeepingWorksheet(
     assignments: Map<string, string>,
     source: RoomFeed,
     restore?: Plan,
+    supervisorIntent?: Row[],
   ) {
     const rooms = await enrich(tx, u, s, source),
       roomById = new Map(rooms.map((r) => [r.id, r]));
@@ -454,8 +568,22 @@ export function registerHousekeepingWorksheet(
     const available = (uid: string, role: string) =>
       a.staff.some((r) => r.user_id === uid && r.job_role === role) &&
       schedules.find((r) => r.user_id === uid)?.available !== false;
+    const beforeProjection = resolveWorksheetCoverage(
+      coverageRows(before.supervisors),
+      rooms,
+      Object.fromEntries(before.rooms.map((r) => [r.room_id, r.attendant_id])),
+      Object.fromEntries(
+        before.attendants.map((r) => [r.attendant_id, r.supervisor_id]),
+      ),
+    );
     const authorized = !!(
-      a.self?.job_role === "supervisor" && a.self.can_manage
+      a.self?.job_role === "supervisor" &&
+      available(u.id, "supervisor") &&
+      (a.self.can_manage ||
+        before.supervisors.some(
+          (r) => r.supervisor_id === u.id && r.floors.length,
+        ) ||
+        Object.values(beforeProjection.roomOwners).includes(u.id))
     );
     if (!a.manager && !authorized)
       throw fail(403, "Local assignment management not authorized");
@@ -475,21 +603,21 @@ export function registerHousekeepingWorksheet(
     );
     if (!a.manager) {
       for (const uid of changedTeam)
-        if (beforeTeam.get(uid) !== u.id || team.get(uid) !== u.id)
+        if (
+          (beforeTeam.has(uid) && beforeTeam.get(uid) !== u.id) ||
+          team.get(uid) !== u.id
+        )
           throw fail(
             403,
             "Only managers may move attendants between supervisors",
           );
-      const coverage =
-        before.supervisors.find((r) => r.supervisor_id === u.id)?.coverage ||
-        [];
       for (const room of changedRooms) {
         const old = beforeAssignments.get(room),
           next = assignments.get(room);
         if (
           (old && beforeTeam.get(old) !== u.id) ||
           (next && team.get(next) !== u.id) ||
-          (!old && !coverage.includes(room))
+          beforeProjection.roomOwners[room] !== u.id
         )
           throw fail(403, "Room is outside your authorized team coverage");
       }
@@ -531,6 +659,35 @@ export function registerHousekeepingWorksheet(
           );
     }
     const affectedStaff = new Set<string>();
+    const intent =
+      supervisorIntent || restore?.supervisors || before.supervisors;
+    const projected = resolveWorksheetCoverage(
+      coverageRows(intent),
+      rooms,
+      Object.fromEntries(assignments),
+      Object.fromEntries(team),
+    );
+    if (projected.conflictFloors.length)
+      throw fail(
+        409,
+        "A floor may have only one primary supervisor in the same date and shift",
+      );
+    for (const row of intent) {
+      const old = before.supervisors.find(
+        (r) => r.supervisor_id === row.supervisor_id,
+      );
+      if (
+        row.floors.some((f: string) => !old?.floors.includes(f)) ||
+        row.rooms.some((r: string) => !old?.rooms.includes(r))
+      ) {
+        if (!available(row.supervisor_id, "supervisor"))
+          throw fail(
+            409,
+            "Supervisor is inactive or unavailable for this date and shift",
+          );
+        affectedStaff.add(row.supervisor_id);
+      }
+    }
     for (const uid of changedTeam) {
       affectedStaff.add(uid);
       affectedStaff.add(team.get(uid)!);
@@ -547,31 +704,35 @@ export function registerHousekeepingWorksheet(
       await tx.execute(
         sql`INSERT INTO housekeeping_staff_schedules VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${uid},true) ON CONFLICT DO NOTHING`,
       );
+    for (const uid of assignments.values())
+      if (!team.has(uid)) throw fail(409, "Attendant has no supervisor");
     const coverage = new Map<string, Set<string>>();
-    for (const v of restore?.supervisors || before.supervisors)
-      coverage.set(v.supervisor_id, new Set(v.coverage));
-    for (const [room, uid] of assignments) {
-      const supervisor = team.get(uid);
-      if (!supervisor) throw fail(409, "Attendant has no supervisor");
-      for (const [spv, values] of coverage)
-        if (spv !== supervisor) values.delete(room);
-      if (!coverage.has(supervisor)) coverage.set(supervisor, new Set());
-      coverage.get(supervisor)!.add(room);
-    }
+    for (const [room, owner] of Object.entries(projected.roomOwners))
+      if (owner) {
+        if (!coverage.has(owner)) coverage.set(owner, new Set());
+        coverage.get(owner)!.add(room);
+      }
     for (const supervisor of new Set([
       ...team.values(),
       ...coverage.keys(),
       ...before.supervisors.map((r) => r.supervisor_id),
+      ...intent.map((r) => r.supervisor_id),
     ])) {
       const old = before.supervisors.find(
           (r) => r.supervisor_id === supervisor,
         ),
-        restored = restore?.supervisors.find(
-          (r) => r.supervisor_id === supervisor,
-        );
+        restored = intent.find((r) => r.supervisor_id === supervisor);
       const ids = [...(coverage.get(supervisor) || [])].sort();
+      const floors = [...new Set<string>(restored?.floors || [])].sort();
+      const exceptions = Object.entries(projected.roomExceptions)
+        .filter(([, owner]) => owner === supervisor)
+        .map(([id]) => id)
+        .sort();
       const unchanged =
-        old && JSON.stringify([...old.coverage].sort()) === JSON.stringify(ids);
+        old &&
+        JSON.stringify([...old.coverage].sort()) === JSON.stringify(ids) &&
+        JSON.stringify([...old.floors].sort()) === JSON.stringify(floors) &&
+        JSON.stringify([...old.rooms].sort()) === JSON.stringify(exceptions);
       if (!old) {
         if (!available(supervisor, "supervisor"))
           throw fail(409, "Supervisor is not eligible");
@@ -579,9 +740,9 @@ export function registerHousekeepingWorksheet(
           sql`INSERT INTO housekeeping_staff_schedules VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${supervisor},true) ON CONFLICT DO NOTHING`,
         );
       }
-      if (!unchanged || restored || !old)
+      if (!unchanged || !old)
         await tx.execute(
-          sql`INSERT INTO housekeeping_supervisor_assignments VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${supervisor},${JSON.stringify(restored?.floors || (unchanged ? old?.floors : []) || [])}::jsonb,${JSON.stringify(restored?.rooms || ids)}::jsonb,${JSON.stringify(ids)}::jsonb) ON CONFLICT(tenant_id,property_id,business_date,shift_id,supervisor_id) DO UPDATE SET floors=excluded.floors,rooms=excluded.rooms,coverage=excluded.coverage`,
+          sql`INSERT INTO housekeeping_supervisor_assignments VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${supervisor},${JSON.stringify(floors)}::jsonb,${JSON.stringify(exceptions)}::jsonb,${JSON.stringify(ids)}::jsonb) ON CONFLICT(tenant_id,property_id,business_date,shift_id,supervisor_id) DO UPDATE SET floors=excluded.floors,rooms=excluded.rooms,coverage=excluded.coverage`,
         );
     }
     for (const [uid, supervisor] of team) {
@@ -651,10 +812,7 @@ export function registerHousekeepingWorksheet(
       await assertPrincipal(tx, u, s.propertyId);
       await assertFeed(tx, u, s, source);
       const a = await h.access(tx, u, s.propertyId);
-      if (
-        !a.manager &&
-        !(a.self?.job_role === "supervisor" && a.self.can_manage)
-      )
+      if (!a.manager && a.self?.job_role !== "supervisor")
         throw fail(403, "Assignment management not authorized");
       const hash = createHash("sha256").update(JSON.stringify(b)).digest("hex");
       const repeated = (
@@ -694,9 +852,11 @@ export function registerHousekeepingWorksheet(
         );
       let restore: Plan | undefined,
         undoOf: string | null = null;
+      let supervisorIntent = cloneSupervisors(before.supervisors);
       let undoPlan = {
         team: Object.fromEntries(team),
         assignments: Object.fromEntries(assignments),
+        supervisors: cloneSupervisors(supervisorIntent),
       };
       if (undo) {
         const change = (
@@ -711,7 +871,7 @@ export function registerHousekeepingWorksheet(
           );
         const target = change.undo_plan;
         restore = {
-          supervisors: change.before_plan.supervisors,
+          supervisors: target.supervisors || change.before_plan.supervisors,
           attendants: Object.entries(target.team).map(([uid, spv]) => ({
             ...change.before_plan.attendants.find(
               (r: Row) => r.attendant_id === uid,
@@ -727,6 +887,7 @@ export function registerHousekeepingWorksheet(
           })),
         };
         undoOf = change.id;
+        supervisorIntent = cloneSupervisors(restore.supervisors);
         assignments.clear();
         for (const r of restore!.rooms)
           assignments.set(r.room_id, r.attendant_id);
@@ -734,20 +895,117 @@ export function registerHousekeepingWorksheet(
         for (const r of restore!.attendants)
           team.set(r.attendant_id, r.supervisor_id);
       } else {
+        const verifiedRooms = await enrich(tx, u, s, source),
+          verifiedIds = new Set(verifiedRooms.map((r) => r.id));
+        const coverageEdits = new Map<string, string | null>();
+        const ensureSupervisor = (uid: string) => {
+          let row = supervisorIntent.find((r) => r.supervisor_id === uid);
+          if (!row) {
+            row = { supervisor_id: uid, floors: [], rooms: [], coverage: [] };
+            supervisorIntent.push(row);
+          }
+          return row;
+        };
         for (const op of (b as z.infer<typeof mutationSchema>).operations) {
           undoPlan = {
             team: Object.fromEntries(team),
             assignments: Object.fromEntries(assignments),
+            supervisors: cloneSupervisors(supervisorIntent),
           };
           if (op.type === "team") team.set(op.attendantId, op.supervisorId);
-          else
+          else if (op.type === "floors") {
+            if (!a.manager)
+              throw fail(403, "Only managers can assign primary floors");
+            for (const floor of op.floorIds) {
+              if (
+                op.supervisorId &&
+                (!source.available ||
+                  !verifiedRooms.some((r) => r.floor === floor))
+              )
+                throw fail(
+                  409,
+                  "Floor must exist in the current verified room feed",
+                );
+              const owners = supervisorIntent.filter((r) =>
+                r.floors.includes(floor),
+              );
+              if (
+                op.supervisorId &&
+                !op.replace &&
+                owners.some((r) => r.supervisor_id !== op.supervisorId)
+              )
+                throw fail(
+                  409,
+                  "Floor already has a primary supervisor; choose an explicit replacement",
+                );
+              for (const row of supervisorIntent) {
+                row.floors = row.floors.filter((f: string) => f !== floor);
+                row.coverage = row.coverage.filter(
+                  (id: string) =>
+                    !verifiedRooms.some(
+                      (r) => r.id === id && r.floor === floor,
+                    ),
+                );
+              }
+              if (op.supervisorId)
+                ensureSupervisor(op.supervisorId).floors.push(floor);
+            }
+          } else if (op.type === "coverage") {
+            if (!a.manager)
+              throw fail(
+                403,
+                "Only managers can set room-specific supervisor exceptions",
+              );
+            for (const rid of op.roomIds) {
+              if (
+                op.supervisorId &&
+                (!source.available || !verifiedIds.has(rid))
+              )
+                throw fail(
+                  409,
+                  "Exception room must exist in the current verified feed",
+                );
+              for (const row of supervisorIntent) {
+                row.rooms = row.rooms.filter((r: string) => r !== rid);
+                row.coverage = row.coverage.filter((r: string) => r !== rid);
+              }
+              if (op.supervisorId)
+                ensureSupervisor(op.supervisorId).rooms.push(rid);
+              coverageEdits.set(rid, op.supervisorId);
+            }
+          } else
             for (const room of op.roomIds) {
               if (op.attendantId === null) assignments.delete(room);
               else assignments.set(room, op.attendantId);
             }
         }
+        const planned = resolveWorksheetCoverage(
+          coverageRows(supervisorIntent),
+          verifiedRooms,
+          {},
+          {},
+        );
+        for (const [rid, exception] of coverageEdits) {
+          const att = assignments.get(rid);
+          if (att && team.get(att) !== (exception || planned.roomOwners[rid]))
+            throw fail(
+              409,
+              "Existing attendant work must stay with its team; move the room or team before clearing/changing this exception",
+            );
+        }
       }
-      await apply(tx, u, s, a, before, team, assignments, source, restore);
+      await apply(
+        tx,
+        u,
+        s,
+        a,
+        before,
+        team,
+        assignments,
+        source,
+        restore,
+        supervisorIntent,
+      );
       const after = await loadPlan(tx, u, s),
         changeId = randomUUID();
       await h.changed(
