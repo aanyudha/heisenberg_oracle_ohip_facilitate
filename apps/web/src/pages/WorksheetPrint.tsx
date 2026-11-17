@@ -104,17 +104,17 @@ export default function WorksheetPrint({
                 .filter(Boolean)
                 .join(" · ")}
               <br />
-              {r.tasks.join(", ") || "No task supplied"}
+              {r.tasks.join(", ")}
             </td>
             <td>
-              {r.credits ?? "—"}
+              {r.credits ?? "-"}
               <br />
               <small>
                 {r.creditSource === "OHIP"
                   ? "OHIP"
                   : r.creditSource === "local"
                     ? "Local rule"
-                    : "Unconfigured"}
+                    : "-"}
               </small>
             </td>
             <td>

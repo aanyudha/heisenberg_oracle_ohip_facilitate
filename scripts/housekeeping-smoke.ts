@@ -238,9 +238,7 @@ try {
     async () => (await worksheet()).team[f.a2.id] === f.s1.id,
     "Second attendant was not grouped",
   );
-  await page
-    .getByLabel("Assign room 203 to", { exact: true })
-    .selectOption(f.a2.id);
+  await assignRoom(page, "203", f.a2.id);
   await until(
     async () => (await worksheet()).assignments["203"] === f.a2.id,
     "Assign To was not saved",
@@ -310,18 +308,13 @@ try {
     }
     await route.continue();
   });
-  await page
-    .getByLabel("Assign room 201 to", { exact: true })
-    .selectOption(f.a2.id);
+  await assignRoom(page, "201", f.a2.id);
   await seen;
   await remoteMove([{ type: "rooms", roomIds: ["201"], attendantId: null }]);
   release();
   await page.getByText(/Worksheet changed by another user/).waitFor();
   await until(
-    async () =>
-      (await page!
-        .getByLabel("Assign room 201 to", { exact: true })
-        .inputValue()) === "",
+    async () => (await roomOwner(page!, "201")) === "",
     "Conflicting optimistic move was not rolled back",
   );
   checks.push(
@@ -341,15 +334,10 @@ try {
       });
     } else await route.continue();
   });
-  await page
-    .getByLabel("Assign room 202 to", { exact: true })
-    .selectOption(f.a2.id);
+  await assignRoom(page, "202", f.a2.id);
   await page.getByText(/Deliberate isolated smoke save failure/).waitFor();
   await until(
-    async () =>
-      (await page!
-        .getByLabel("Assign room 202 to", { exact: true })
-        .inputValue()) === f.a1.id,
+    async () => (await roomOwner(page!, "202")) === f.a1.id,
     "Failed autosave was not rolled back",
   );
   await page.unroute("**/api/local-housekeeping/worksheet");
@@ -392,7 +380,7 @@ try {
   );
   checks.push("Shift selection isolates assignments");
   await page.getByLabel("Housekeeping shift").selectOption("AM");
-  await page.getByLabel("Assign room 202 to", { exact: true }).waitFor();
+  await page.getByLabel("Select room 202", { exact: true }).waitFor();
   await page
     .getByRole("button", { name: "Print Worksheet", exact: true })
     .click();
@@ -563,9 +551,7 @@ try {
     .getByRole("heading", { name: "My Team", exact: true })
     .waitFor();
   await supervisor.getByLabel("Business date").fill(scope.date);
-  await supervisor
-    .getByLabel("Assign room 202 to", { exact: true })
-    .selectOption(f.a2.id);
+  await assignRoom(supervisor, "202", f.a2.id);
   await until(
     async () => (await worksheet()).assignments["202"] === f.a2.id,
     "Authorized mobile supervisor reassignment was not saved",
@@ -635,4 +621,31 @@ try {
 } finally {
   await browser?.close();
   await f.close();
+}
+
+async function assignRoom(
+  page: import("playwright").Page,
+  id: string,
+  target: string,
+) {
+  await page
+    .locator(".worksheet-selection-summary")
+    .getByRole("button", { name: "Clear selection", exact: true })
+    .click();
+  await page.getByLabel("Select room " + id, { exact: true }).check();
+  await page
+    .getByLabel("Batch assign to", { exact: true })
+    .selectOption(target || "unassigned");
+  await page
+    .getByRole("button", { name: "Assign selected", exact: true })
+    .click();
+}
+async function roomOwner(page: import("playwright").Page, id: string) {
+  return page
+    .locator('[data-room-id="' + id + '"]')
+    .evaluate(
+      (e) =>
+        e.closest("[data-attendant-id]")?.getAttribute("data-attendant-id") ||
+        "",
+    );
 }

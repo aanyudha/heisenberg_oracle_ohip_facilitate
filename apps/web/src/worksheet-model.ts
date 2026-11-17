@@ -13,6 +13,26 @@ export function moveWorksheet(
   sheet: Worksheet,
   operation: WorksheetOperation,
 ): Worksheet {
+  if (operation.type === "schedule") {
+    const update = (staff: Worksheet["attendants"]) =>
+      staff
+        .map((s) =>
+          operation.userIds.includes(s.id) && s.active
+            ? { ...s, available: true, eligibilityReason: null }
+            : s,
+        )
+        .sort(
+          (a, b) =>
+            Number(b.available) - Number(a.available) ||
+            a.name.localeCompare(b.name),
+        );
+    return {
+      ...sheet,
+      rosterConfigured: true,
+      supervisors: update(sheet.supervisors),
+      attendants: update(sheet.attendants),
+    };
+  }
   const team = { ...sheet.team };
   const assignments = { ...sheet.assignments };
   const supervisors: SupervisorCoverage[] = sheet.supervisors.map((s) => ({

@@ -14,6 +14,7 @@ import {
   type SupervisorCoverage,
 } from "@hospitality/contracts";
 import type { Principal } from "./realtime.js";
+import { staffStatusRows, staffStatus } from "./housekeeping-eligibility.js";
 import {
   housekeepingFeed,
   roomConnection,
@@ -48,7 +49,12 @@ const fail = (statusCode: number, message: string) =>
   Object.assign(new Error(message), { statusCode });
 const where = (u: Principal, s: WorksheetScope) =>
   sql`tenant_id=${u.tenantId} AND property_id=${s.propertyId} AND business_date=${s.date} AND shift_id=${s.shiftId}`;
-type Plan = { supervisors: Row[]; attendants: Row[]; rooms: Row[] };
+type Plan = {
+  supervisors: Row[];
+  attendants: Row[];
+  rooms: Row[];
+  schedules?: { user_id: string; available: boolean | null }[];
+};
 const coverageRows = (rows: Row[]): SupervisorCoverage[] =>
   rows.map((r) => ({
     supervisorId: r.supervisor_id,
@@ -305,25 +311,33 @@ export function registerHousekeepingWorksheet(
         if (a.manager)
           for (const r of plan.supervisors)
             visibleSupervisorIds.add(r.supervisor_id);
-        const names = (
-          await tx.execute(
-            sql`SELECT u.id,u.name FROM users u JOIN memberships m ON m.user_id=u.id WHERE m.tenant_id=${u.tenantId}`,
-          )
-        ).rows as Row[];
+        const statusRows = await staffStatusRows(tx, u.tenantId, s, [
+          ...visibleAttendantIds,
+          ...visibleSupervisorIds,
+        ]);
         const staff = (ids: Set<string>, role: string) =>
-          [...ids].map((uid) => ({
-            id: uid,
-            name:
-              names.find((r) => r.id === uid)?.name ||
-              "Unavailable registered staff",
-            active: a.staff.some(
-              (r) => r.user_id === uid && r.job_role === role,
-            ),
-            available:
-              schedules.find((r) => r.user_id === uid)?.available === true,
-          }));
+          [...ids]
+            .map((uid) => staffStatus(uid, role, statusRows.get(uid)))
+            .sort(
+              (a, b) =>
+                Number(b.available) - Number(a.available) ||
+                a.name.localeCompare(b.name, "id"),
+            );
         const attendants = staff(visibleAttendantIds, "attendant"),
           supervisors = staff(visibleSupervisorIds, "supervisor");
+        for (const attendant of attendants) {
+          const supervisor = supervisors.find(
+            (s) => s.id === team[attendant.id],
+          );
+          attendant.assignmentBlockReason =
+            attendant.available &&
+            team[attendant.id] &&
+            (!supervisor?.active || !supervisor.available)
+              ? "supervisor_unavailable"
+              : attendant.available && !team[attendant.id] && a.manager
+                ? "supervisor_required"
+                : null;
+        }
         const assignments = Object.fromEntries(
           plan.rooms
             .filter((r) => visibleAttendantIds.has(r.attendant_id))
@@ -374,17 +388,6 @@ export function registerHousekeepingWorksheet(
         if (credits.length > 1 && mean > 0 && Math.max(...credits) > mean * 1.5)
           warnings.push(
             "Workload imbalance: an attendant exceeds 150% of the available team average.",
-          );
-        if (rooms.some((r) => r.creditSource === "not_configured"))
-          warnings.push(
-            "Credits not configured for some rooms. Totals show known credits only.",
-          );
-        if (
-          attendants.some((r) => !r.active || !r.available) ||
-          supervisors.some((r) => !r.active || !r.available)
-        )
-          warnings.push(
-            "Some assigned staff are inactive or unavailable. Release or reassign their local rooms.",
           );
         return {
           scope: s,
@@ -531,6 +534,16 @@ export function registerHousekeepingWorksheet(
   const operations = z
     .array(
       z.discriminatedUnion("type", [
+        z
+          .object({
+            type: z.literal("schedule"),
+            userIds: z
+              .array(id)
+              .min(1)
+              .max(100)
+              .refine((v) => new Set(v).size === v.length),
+          })
+          .strict(),
         z
           .object({
             type: z.literal("distribute"),
@@ -902,7 +915,48 @@ export function registerHousekeepingWorksheet(
         team: Object.fromEntries(team),
         assignments: Object.fromEntries(assignments),
         supervisors: cloneSupervisors(supervisorIntent),
+        schedules: undefined as Plan["schedules"],
       };
+      const scheduledIds = !undo
+        ? [
+            ...new Set(
+              (b as z.infer<typeof mutationSchema>).operations.flatMap((op) =>
+                op.type === "schedule" ? op.userIds : [],
+              ),
+            ),
+          ]
+        : [];
+      if (scheduledIds.length) {
+        if (!a.manager)
+          throw fail(403, "Only managers can add staff to a shift");
+        for (const uid of scheduledIds)
+          if (
+            !a.staff.some(
+              (staff) =>
+                staff.user_id === uid &&
+                ["supervisor", "attendant"].includes(staff.job_role),
+            )
+          )
+            throw fail(
+              403,
+              "Select active registered staff with the correct role and property access",
+            );
+        const previous = (
+          await tx.execute(
+            sql`SELECT user_id,available FROM housekeeping_staff_schedules WHERE ${where(u, s)}`,
+          )
+        ).rows as Row[];
+        before.schedules = scheduledIds.map((user_id) => ({
+          user_id,
+          available:
+            previous.find((row) => row.user_id === user_id)?.available ?? null,
+        }));
+        undoPlan.schedules = before.schedules;
+        for (const uid of scheduledIds)
+          await tx.execute(
+            sql`INSERT INTO housekeeping_staff_schedules VALUES (${u.tenantId},${s.propertyId},${s.date},${s.shiftId},${uid},true) ON CONFLICT(tenant_id,property_id,business_date,shift_id,user_id) DO UPDATE SET available=true`,
+          );
+      }
       if (undo) {
         const change = (
           await tx.execute(
@@ -915,6 +969,20 @@ export function registerHousekeepingWorksheet(
             "Only your last unchanged worksheet move can be undone",
           );
         const target = change.undo_plan;
+        if (target.schedules?.length && !a.manager)
+          throw fail(403, "Only managers can undo shift scheduling");
+        if (target.schedules?.length) {
+          const current = (
+            await tx.execute(
+              sql`SELECT user_id,available FROM housekeeping_staff_schedules WHERE ${where(u, s)}`,
+            )
+          ).rows as Row[];
+          before.schedules = target.schedules.map((row: Row) => ({
+            user_id: row.user_id,
+            available:
+              current.find((r) => r.user_id === row.user_id)?.available ?? null,
+          }));
+        }
         restore = {
           supervisors: target.supervisors || change.before_plan.supervisors,
           attendants: Object.entries(target.team).map(([uid, spv]) => ({
@@ -930,6 +998,7 @@ export function registerHousekeepingWorksheet(
             room_id: rid,
             attendant_id: uid,
           })),
+          schedules: target.schedules,
         };
         undoOf = change.id;
         supervisorIntent = cloneSupervisors(restore.supervisors);
@@ -952,11 +1021,14 @@ export function registerHousekeepingWorksheet(
           return row;
         };
         for (const op of (b as z.infer<typeof mutationSchema>).operations) {
-          undoPlan = {
-            team: Object.fromEntries(team),
-            assignments: Object.fromEntries(assignments),
-            supervisors: cloneSupervisors(supervisorIntent),
-          };
+          if (op.type === "schedule") continue;
+          if (!scheduledIds.length)
+            undoPlan = {
+              team: Object.fromEntries(team),
+              assignments: Object.fromEntries(assignments),
+              supervisors: cloneSupervisors(supervisorIntent),
+              schedules: before.schedules,
+            };
           if (op.type === "distribute") {
             if (
               !source.available ||
@@ -1127,6 +1199,18 @@ export function registerHousekeepingWorksheet(
       );
       const after = await loadPlan(tx, u, s),
         changeId = randomUUID();
+      if (restore?.schedules) {
+        for (const row of restore.schedules)
+          await tx.execute(
+            sql`UPDATE housekeeping_staff_schedules SET available=${row.available === true} WHERE ${where(u, s)} AND user_id=${row.user_id}`,
+          );
+      }
+      if (scheduledIds.length || restore?.schedules)
+        after.schedules = (
+          await tx.execute(
+            sql`SELECT user_id,available FROM housekeeping_staff_schedules WHERE ${where(u, s)}`,
+          )
+        ).rows as { user_id: string; available: boolean }[];
       await h.changed(
         tx,
         u,

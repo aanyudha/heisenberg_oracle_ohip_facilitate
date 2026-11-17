@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased - Simplify Housekeeping and restore English (2026-11-17)
+
+- Restored English across the Housekeeping worksheet and print UI. Removed daily shift-configuration panels, mandatory roster-editor steps and repetitive per-room dropdowns; retained the existing design, room selection, drag/drop and distribution preview.
+- Kept eligible registered staff visible when Not Scheduled, with scheduled staff first. Authorized Managers can explicitly Add to Shift or Add to Shift & Assign inline; only named selected staff are scheduled.
+- Combined scheduling and existing assignments in the same worksheet transaction, lock/revision/idempotency checks and audit history, including rollback and combined Undo. Preserved User Management identity/role authority, scope/RBAC, saved-data PDF accuracy, and OHIP strict read-only. No new routes, schema migrations, owner DB correction/restart or production deployment.
+
+## Unreleased - Housekeeping Supervisor/Attendant usability (2026-11-17)
+
+- Traced the reported empty Supervisor selector to explicit date/shift roster eligibility, distinct from registered/historical board cards. Added scoped eligibility reasons to the existing worksheet/roster responses and explained unavailable team Supervisors without weakening assignment permissions or silently scheduling users.
+- Kept excluded Supervisors visible as disabled named options, connected roster blockers to the existing staff editor, prioritized eligible Attendants, and grouped unused unavailable staff below working teams. Clarified coverage/assigned counts, localized daily HK labels, omitted empty task placeholders and moved missing-credit explanations into workload details.
+- Preserved atomic assignment/revision/rollback/Undo/WebSocket and canonical saved print behavior. Added 274-room real-login browser/DB/PDF verification plus inactive/role/property/scheduling, historical ownership, concurrent revision and mobile regressions. No historical migration, OHIP Task Sheet, Oracle write, owner data correction/restart or production deployment.
+
 ## Unreleased - Startup reliability and LAN diagnostics (2026-11-17)
 
 - Fixed the reproduced LAN HTTP blank screen: HTTP origins no longer receive HTTPS asset-upgrade directives. Kept strict script CSP, authentication, origin/CSRF/cookie checks and production HTTPS requirements. Added bootstrap failure UI and root React error boundary; local shift IDs use cryptographic UUID fallback on LAN HTTP.

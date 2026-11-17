@@ -137,6 +137,101 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("operational selection and print refinement", () => {
+  it("uses a dash for incomplete assigned credits and keeps working attendants before unscheduled staff", async () => {
+    value.selfRole = "supervisor";
+    value.manager = false;
+    value.assignments = { "201": "a1" };
+    value.rooms[0].credits = null;
+    value.attendants[1] = {
+      ...value.attendants[1],
+      available: false,
+      eligibilityReason: "not_scheduled",
+    };
+    delete value.team.a2;
+    mount({ ...user, id: "s1", role: "housekeeping" });
+    await screen.findByRole("heading", { name: "My Team" });
+    expect(
+      screen.getByText("Total Credits").nextElementSibling,
+    ).toHaveTextContent("-");
+    expect(
+      [...document.querySelectorAll("[data-attendant-id]")].map((e) =>
+        e.getAttribute("data-attendant-id"),
+      ),
+    ).toEqual(["a1", "a2"]);
+    expect(
+      screen.queryByRole("button", { name: "Add Attendant Two to My Team" }),
+    ).not.toBeInTheDocument();
+  });
+  it("offers explicit Manager consent when dropping rooms onto a Not Scheduled Room Attendant", async () => {
+    value.attendants[0] = {
+      ...value.attendants[0],
+      available: false,
+      eligibilityReason: "not_scheduled",
+    };
+    mount();
+    await ready();
+    fireEvent.drop(document.querySelector('[data-attendant-id="a1"]')!, {
+      dataTransfer: { getData: () => JSON.stringify(["201"]) },
+    });
+    const action = screen.getByRole("region", {
+      name: "Add team staff to shift and assign",
+    });
+    expect(action).toHaveTextContent("Attendant One");
+    expect(writes).toHaveLength(0);
+    fireEvent.click(
+      within(action).getByRole("button", { name: "Add to Shift & Assign" }),
+    );
+    await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
+    expect(writes[0].body.operations).toEqual([
+      { type: "schedule", userIds: ["a1"] },
+      { type: "rooms", roomIds: ["201"], attendantId: "a1" },
+    ]);
+  });
+  it("keeps unscheduled registered supervisors visible and combines scheduling with floor assignment without configuration", async () => {
+    value.supervisors[0] = {
+      ...value.supervisors[0],
+      available: false,
+      eligibilityReason: "not_scheduled",
+    };
+    value.floorAssignments = [
+      {
+        id: "West",
+        supervisorId: null,
+        totalRooms: 1,
+        assignedRooms: 0,
+        unassignedRooms: 1,
+        credits: 2.5,
+        missingCredits: 0,
+        exceptionRooms: 0,
+        conflict: false,
+      },
+    ];
+    mount();
+    await ready();
+    expect(screen.queryByText("Configure shifts")).not.toBeInTheDocument();
+    expect(screen.queryByText("Manage Shift Staff")).not.toBeInTheDocument();
+    const option = within(
+      screen.getByLabelText("Supervisor for floor West"),
+    ).getByRole("option", { name: /Supervisor - Not Scheduled/ });
+    expect(option).toBeEnabled();
+    fireEvent.change(screen.getByLabelText("Supervisor for floor West"), {
+      target: { value: "s1" },
+    });
+    expect(writes).toHaveLength(0);
+    const action = screen.getByRole("region", {
+      name: "Add supervisor to shift and assign",
+    });
+    expect(action).toHaveTextContent("Morning");
+    expect(action).toHaveTextContent("2026-11-12");
+    fireEvent.click(
+      within(action).getByRole("button", { name: "Add to Shift & Assign" }),
+    );
+    await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
+    expect(writes[0].body.operations).toEqual([
+      { type: "schedule", userIds: ["s1"] },
+      { type: "floors", floorIds: ["West"], supervisorId: "s1", replace: true },
+    ]);
+  });
   it("retains hidden selection through combined filters and requires explicit all-matching confirmation", async () => {
     mount();
     await ready();
@@ -218,9 +313,7 @@ describe("operational selection and print refinement", () => {
     fireEvent.change(screen.getByLabelText("Filter floor"), {
       target: { value: "East" },
     });
-    fireEvent.click(
-      screen.getByRole("button", { name: "Print Worksheet" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Print Worksheet" }));
     const preview = await screen.findByRole("dialog", {
       name: "Worksheet print preview",
     });
@@ -325,13 +418,15 @@ describe("worksheet interaction and autosave", () => {
     expect(
       screen.queryByLabelText("Supervisor for floor West"),
     ).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Assign room 201 to"), {
-      target: { value: "a1" },
-    });
+    assignRoom("201", "a1");
     await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
     expect(writes[0].body.operations).toEqual([
-      { type: "team", attendantId: "a1", supervisorId: "s1" },
-      { type: "rooms", roomIds: ["201"], attendantId: "a1" },
+      {
+        type: "distribute",
+        roomIds: ["201"],
+        attendantIds: ["a1"],
+        mode: "equal",
+      },
     ]);
   });
   it("prints master and attendant modes with saved revision, stale source and signatures", async () => {
@@ -400,22 +495,18 @@ describe("worksheet interaction and autosave", () => {
     expect(target.textContent).toContain("1 Departure");
     expect(target.textContent).toContain("1 Stayover");
     await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
-    fireEvent.change(screen.getByLabelText("Assign room 202 to"), {
-      target: { value: "a2" },
-    });
+    assignRoom("202", "a2");
     await waitFor(() => expect(writes).toHaveLength(2), { timeout: 2500 });
     expect(writes[1].body.operations[0]).toMatchObject({
       roomIds: ["202"],
-      attendantId: "a2",
+      attendantIds: ["a2"],
     });
   });
   it("rolls back optimistic moves on save failure and clearly reports the failure", async () => {
     writeStatus = 500;
     mount();
     await ready();
-    fireEvent.change(screen.getByLabelText("Assign room 201 to"), {
-      target: { value: "a1" },
-    });
+    assignRoom("201", "a1");
     await screen.findByText(
       /Local pending moves have been rolled back/,
       {},
@@ -426,37 +517,29 @@ describe("worksheet interaction and autosave", () => {
         document.querySelector("[data-drop-unassigned]") as HTMLElement,
       ).getByRole("article", { name: "Room 201" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Assign room 201 to")).toHaveValue("");
+    expect(roomOwner("201")).toBe("");
   });
   it("rolls back a stale save and reconciles another user’s assignments", async () => {
     writeStatus = 409;
     mount();
     await ready();
-    fireEvent.change(screen.getByLabelText("Assign room 201 to"), {
-      target: { value: "a1" },
-    });
+    assignRoom("201", "a1");
     value = { ...value, revision: "2", assignments: { "201": "a2" } };
     await screen.findByText(
       /Worksheet changed by another user/,
       {},
       { timeout: 3000 },
     );
-    await waitFor(() =>
-      expect(screen.getByLabelText("Assign room 201 to")).toHaveValue("a2"),
-    );
+    await waitFor(() => expect(roomOwner("201")).toBe("a2"));
   });
   it("undoes a pending move without a write and a persisted move through the undo API", async () => {
     mount();
     await ready();
-    fireEvent.change(screen.getByLabelText("Assign room 201 to"), {
-      target: { value: "a1" },
-    });
+    assignRoom("201", "a1");
     fireEvent.click(screen.getByRole("button", { name: "Undo last move" }));
-    expect(screen.getByLabelText("Assign room 201 to")).toHaveValue("");
+    expect(roomOwner("201")).toBe("");
     expect(writes).toHaveLength(0);
-    fireEvent.change(screen.getByLabelText("Assign room 201 to"), {
-      target: { value: "a1" },
-    });
+    assignRoom("201", "a1");
     await waitFor(() => expect(writes).toHaveLength(1), { timeout: 2500 });
     await waitFor(() =>
       expect(
@@ -465,9 +548,7 @@ describe("worksheet interaction and autosave", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Undo last move" }));
     await waitFor(() => expect(writes[1]?.path).toMatch(/worksheet\/undo$/));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Assign room 201 to")).toHaveValue(""),
-    );
+    await waitFor(() => expect(roomOwner("201")).toBe(""));
   });
   it("filters by floor/status/type and previews an unfiltered printable worksheet without guest PII", async () => {
     value.assignments = { "201": "a1", "202": "a1" };
@@ -522,3 +603,21 @@ describe("worksheet interaction and autosave", () => {
     ).toBeDisabled();
   });
 });
+
+function assignRoom(id: string, target: string) {
+  const clear = screen.queryAllByRole("button", { name: "Clear selection" })[0];
+  if (clear) fireEvent.click(clear);
+  fireEvent.click(screen.getByLabelText("Select room " + id));
+  fireEvent.change(screen.getByLabelText("Batch assign to"), {
+    target: { value: target || "unassigned" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /Assign selected/ }));
+}
+function roomOwner(id: string) {
+  return (
+    screen
+      .getByRole("article", { name: "Room " + id })
+      .closest("[data-attendant-id]")
+      ?.getAttribute("data-attendant-id") || ""
+  );
+}

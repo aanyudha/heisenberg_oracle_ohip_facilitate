@@ -4,6 +4,7 @@ import { z } from "zod";
 import { sql, type Database } from "./db.js";
 import { appendEvent, type Principal } from "./realtime.js";
 import { registerHousekeepingWorksheet } from "./housekeeping-worksheet.js";
+import { staffStatusRows, staffStatus } from "./housekeeping-eligibility.js";
 
 const id = z.string().trim().min(1).max(100);
 const list = z.array(id).max(1000).default([]);
@@ -218,19 +219,21 @@ export function registerHousekeeping(
     return locked(u, s.propertyId, async (tx) => {
       const a = await access(tx, u, s.propertyId);
       if (!a.manager) throw fail(403, "Manager required");
-      const schedules = (
+      const candidates = (
         await tx.execute(
-          sql`SELECT user_id,available FROM housekeeping_staff_schedules WHERE ${where(u, s)}`,
+          sql`SELECT user_id FROM housekeeping_staff_profiles WHERE tenant_id=${u.tenantId} AND property_id=${s.propertyId} UNION SELECT user_id FROM housekeeping_staff_schedules WHERE ${where(u, s)}`,
         )
-      ).rows;
+      ).rows as Row[];
+      const statuses = await staffStatusRows(
+        tx,
+        u.tenantId,
+        s,
+        candidates.map((r) => String(r.user_id)),
+      );
       return {
-        staff: a.staff.map((r) => ({
-          id: r.user_id,
-          name: r.name,
-          role: r.job_role,
-          available: schedules.some(
-            (t) => t.user_id === r.user_id && t.available,
-          ),
+        staff: [...statuses.values()].map((row) => ({
+          ...staffStatus(row.id, row.job_role || "attendant", row),
+          role: row.job_role || "attendant",
         })),
       };
     });

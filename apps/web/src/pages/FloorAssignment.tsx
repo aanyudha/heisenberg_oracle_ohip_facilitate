@@ -1,20 +1,43 @@
 import { useState } from "react";
 import type { Worksheet, WorksheetOperation } from "@hospitality/contracts";
+import { staffReason, canSchedule } from "../housekeeping-labels";
 export default function FloorAssignment({
   sheet,
   move,
+  disabled = false,
 }: {
   sheet: Worksheet;
-  move: (op: WorksheetOperation) => void;
+  move: (op: WorksheetOperation, scheduleIds?: string[]) => void;
+  disabled?: boolean;
 }) {
   const [selected, setSelected] = useState<string[]>([]),
     [target, setTarget] = useState("");
+  const [pending, setPending] = useState<{
+    floorIds: string[];
+    supervisorId: string;
+  } | null>(null);
   const rows = sheet.floorAssignments || [];
-  const supervisors = sheet.supervisors.filter((s) => s.active && s.available);
-  const change = (floorIds: string[], supervisorId: string | null) => {
+  function assign(floorIds: string[], supervisorId: string | null) {
+    const staff = sheet.supervisors.find((s) => s.id === supervisorId);
+    if (staff && canSchedule(staff)) {
+      setPending({ floorIds, supervisorId: staff.id });
+      return;
+    }
     move({ type: "floors", floorIds, supervisorId, replace: true });
     setSelected([]);
-  };
+    setPending(null);
+  }
+  const options = (
+    <>
+      <option value="">Unassigned</option>
+      {sheet.supervisors.map((s) => (
+        <option key={s.id} value={s.id} disabled={!s.active}>
+          {s.name}
+          {!s.available ? " - " + staffReason(s) : ""}
+        </option>
+      ))}
+    </>
+  );
   return (
     <section
       className="worksheet-floor-assignment"
@@ -22,37 +45,81 @@ export default function FloorAssignment({
     >
       <div className="worksheet-floor-title">
         <h2>{sheet.manager ? "Floor Assignment" : "My Floors"}</h2>
-        <p>
-          {sheet.manager
-            ? "Assign primary floor responsibility. Existing attendant work is preserved as visible room-specific exceptions when responsibility changes."
-            : "Your floors and room-specific responsibility are assigned by the manager. No floor selection is required."}
-        </p>
       </div>
       {sheet.manager && selected.length > 0 && (
         <div className="worksheet-batch">
           <strong>{selected.length} floors selected</strong>
           <select
             aria-label="Batch floor supervisor"
+            disabled={disabled}
             value={target}
             onChange={(e) => setTarget(e.target.value)}
           >
-            <option value="">Choose supervisor</option>
-            <option value="unassigned">No primary supervisor</option>
-            {supervisors.map((s) => (
-              <option key={s.id} value={s.id}>
+            <option value="">Select Supervisor</option>
+            <option value="unassigned">Unassigned</option>
+            {sheet.supervisors.map((s) => (
+              <option key={s.id} value={s.id} disabled={!s.active}>
                 {s.name}
+                {!s.available ? " - " + staffReason(s) : ""}
               </option>
             ))}
           </select>
           <button
-            disabled={!target}
+            disabled={disabled || !target}
             onClick={() =>
-              change(selected, target === "unassigned" ? null : target)
+              assign(selected, target === "unassigned" ? null : target)
             }
           >
             Assign selected floors
           </button>
-          <button onClick={() => setSelected([])}>Clear floors</button>
+          <button
+            onClick={() => {
+              setSelected([]);
+              setPending(null);
+            }}
+          >
+            Clear
+          </button>
+        </div>
+      )}
+      {pending && (
+        <div
+          className="worksheet-inline-action"
+          role="region"
+          aria-label="Add supervisor to shift and assign"
+        >
+          <p>
+            Add{" "}
+            <strong>
+              {
+                sheet.supervisors.find((s) => s.id === pending.supervisorId)
+                  ?.name
+              }
+            </strong>{" "}
+            to <strong>{sheet.shift.name}</strong> on {sheet.scope.date} and
+            assign {pending.floorIds.length > 1 ? "floors" : "floor"}{" "}
+            {pending.floorIds.join(", ")}.
+          </p>
+          <button
+            className="primary"
+            disabled={disabled}
+            onClick={() => {
+              move(
+                {
+                  type: "floors",
+                  floorIds: pending.floorIds,
+                  supervisorId: pending.supervisorId,
+                  replace: true,
+                },
+                [pending.supervisorId],
+              );
+              setPending(null);
+              setSelected([]);
+            }}
+          >
+            Add to Shift &amp; Assign
+          </button>
+          <button onClick={() => setPending(null)}>Cancel</button>
         </div>
       )}
       <div className="table-scroll">
@@ -60,11 +127,10 @@ export default function FloorAssignment({
           <thead>
             <tr>
               <th>Floor</th>
-              <th>Total Rooms</th>
+              <th>Rooms</th>
               <th>Supervisor</th>
               <th>Assigned</th>
               <th>Unassigned</th>
-              <th>Workload Credits</th>
             </tr>
           </thead>
           <tbody>
@@ -74,7 +140,8 @@ export default function FloorAssignment({
                   {sheet.manager && (
                     <input
                       type="checkbox"
-                      aria-label={`Select floor ${f.id}`}
+                      aria-label={"Select floor " + f.id}
+                      disabled={disabled}
                       checked={selected.includes(f.id)}
                       onChange={(e) =>
                         setSelected((ids) =>
@@ -88,59 +155,52 @@ export default function FloorAssignment({
                   <strong>{f.id}</strong>
                   {f.exceptionRooms > 0 && (
                     <small>
-                      {f.exceptionRooms} room-specific{" "}
-                      {f.exceptionRooms === 1 ? "exception" : "exceptions"} ·
-                      assigned work retained
+                      {f.exceptionRooms} assigned rooms retain their current
+                      team.
                     </small>
                   )}
                   {f.conflict && (
-                    <small role="alert">Primary supervisor conflict</small>
+                    <small role="alert">
+                      Supervisor conflict: review this floor.
+                    </small>
                   )}
                 </td>
                 <td>{f.totalRooms}</td>
                 <td>
                   {sheet.manager ? (
                     <select
-                      aria-label={`Supervisor for floor ${f.id}`}
-                      value={f.supervisorId || ""}
-                      onChange={(e) => change([f.id], e.target.value || null)}
+                      aria-label={"Supervisor for floor " + f.id}
+                      value={
+                        pending?.floorIds.includes(f.id)
+                          ? pending.supervisorId
+                          : f.supervisorId || ""
+                      }
+                      disabled={disabled}
+                      onChange={(e) => assign([f.id], e.target.value || null)}
                     >
-                      <option value="">No primary supervisor</option>
+                      {options}
                       {f.supervisorId &&
-                        !supervisors.some((s) => s.id === f.supervisorId) && (
-                          <option value={f.supervisorId} disabled>
-                            Unavailable supervisor
+                        !sheet.supervisors.some(
+                          (s) => s.id === f.supervisorId,
+                        ) && (
+                          <option disabled value={f.supervisorId}>
+                            Previous Supervisor - review access
                           </option>
                         )}
-                      {supervisors.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
                     </select>
                   ) : (
                     sheet.supervisors.find((s) => s.id === f.supervisorId)
-                      ?.name || "Room-specific coverage"
+                      ?.name || "Room coverage"
                   )}
                 </td>
                 <td>{f.assignedRooms}</td>
                 <td>{f.unassignedRooms}</td>
-                <td>
-                  {f.credits}
-                  {f.missingCredits > 0 && (
-                    <small>{f.missingCredits} unconfigured</small>
-                  )}
-                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      {rows.length === 0 && (
-        <p className="worksheet-drop-hint">
-          No verified floor data or assigned floor responsibility is available.
-        </p>
-      )}
+      {!rows.length && <p>No floors assigned.</p>}
     </section>
   );
 }

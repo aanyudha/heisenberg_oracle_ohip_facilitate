@@ -22,7 +22,11 @@ import { useWorksheetAutosave } from "../useWorksheetAutosave";
 import { workload } from "../worksheet-model";
 import WorksheetPrint from "./WorksheetPrint";
 import FloorAssignment from "./FloorAssignment";
-import ShiftControls from "./ShiftControls";
+import {
+  canSchedule,
+  staffReason,
+  supervisorForRooms,
+} from "../housekeeping-labels";
 import BulkDistribution from "./BulkDistribution";
 import "./HousekeepingWorksheet.css";
 
@@ -63,14 +67,12 @@ export default function HousekeepingWorksheet() {
           <section className="worksheet-empty">
             <DoorOpen size={32} />
             <h2>Housekeeping Worksheet</h2>
-            <p>No local shift is configured for this property.</p>
+            <p>
+              No active shift is available. Ask a manager to check the existing
+              shift definitions.
+            </p>
             {setup.data?.manager && (
-              <ShiftControls
-                propertyId={propertyId}
-                date={date}
-                shiftId=""
-                shifts={setup.data?.shifts || []}
-              />
+              <Link to="/operations/rooms-settings">Shift settings</Link>
             )}
           </section>
         )}
@@ -112,6 +114,10 @@ function WorksheetBoard({
     [service, setService] = useState(""),
     [limit, setLimit] = useState(60),
     [confirmMatching, setConfirmMatching] = useState(false);
+  const [teamAction, setTeamAction] = useState<{
+    op: WorksheetOperation;
+    ids: string[];
+  } | null>(null);
   const selectionRevision = useRef<string | null>(null),
     anchor = useRef<string | null>(null);
   useEffect(() => {
@@ -149,15 +155,21 @@ function WorksheetBoard({
     sheet?.attendants.filter(
       (a) =>
         a.active &&
-        a.available &&
+        (a.available || (sheet.manager && canSchedule(a))) &&
         ((sheet.team[a.id] &&
           sheet.supervisors.some(
-            (s) => s.id === sheet.team[a.id] && s.active && s.available,
+            (s) =>
+              s.id === sheet.team[a.id] &&
+              s.active &&
+              (s.available || (sheet.manager && canSchedule(s))),
           )) ||
           (!sheet.manager &&
             sheet.selfRole === "supervisor" &&
             !sheet.team[a.id] &&
-            sheet.canManage)),
+            sheet.canManage) ||
+          (sheet.manager &&
+            !sheet.team[a.id] &&
+            !!supervisorForRooms(sheet, selected))),
     ) || [];
   const assigned = (uid: string) =>
     sheet?.rooms.filter((r) => sheet.assignments[r.id] === uid) || [];
@@ -228,7 +240,60 @@ function WorksheetBoard({
     [matching, limit],
   );
   const filtered = (r: WorksheetRoom) => visible.has(r.id);
-  const change = (op: WorksheetOperation) => {
+  function scheduleNeeded(op: WorksheetOperation): string[] {
+    if (!sheet?.manager) return [];
+    const ids =
+      op.type === "floors" || op.type === "coverage"
+        ? [op.supervisorId]
+        : op.type === "team"
+          ? [op.attendantId, op.supervisorId]
+          : op.type === "rooms"
+            ? [
+                op.attendantId,
+                op.attendantId
+                  ? sheet.team[op.attendantId] ||
+                    supervisorForRooms(sheet, op.roomIds)
+                  : null,
+              ]
+            : op.type === "distribute"
+              ? op.attendantIds.flatMap((id) => [
+                  id,
+                  sheet.team[id] || supervisorForRooms(sheet, op.roomIds),
+                ])
+              : [];
+    return [
+      ...new Set(
+        ids
+          .filter((id): id is string => !!id)
+          .filter((id) => {
+            const person = [...sheet.supervisors, ...sheet.attendants].find(
+              (s) => s.id === id,
+            );
+            return person && canSchedule(person);
+          }),
+      ),
+    ];
+  }
+  const change = (op: WorksheetOperation, scheduleIds: string[] = []) => {
+    const required = scheduleNeeded(op);
+    if (required.length && !scheduleIds.length) {
+      setTeamAction({ op, ids: required });
+      return;
+    }
+    if (scheduleIds.length) move({ type: "schedule", userIds: scheduleIds });
+    if (sheet?.manager && (op.type === "distribute" || op.type === "rooms")) {
+      const supervisor = supervisorForRooms(sheet, op.roomIds);
+      const targets =
+        op.type === "distribute"
+          ? op.attendantIds
+          : op.attendantId
+            ? [op.attendantId]
+            : [];
+      if (supervisor)
+        for (const id of targets)
+          if (!sheet.team[id])
+            move({ type: "team", attendantId: id, supervisorId: supervisor });
+    }
     if (
       op.type === "rooms" &&
       op.attendantId &&
@@ -290,14 +355,17 @@ function WorksheetBoard({
           <strong>{w.rooms}</strong> rooms
         </span>
         <span>
-          <strong>{w.credits}</strong> credits
-          {w.missingCredits > 0 ? " + unconfigured" : ""}
+          <strong>{w.missingCredits ? "-" : w.credits}</strong> credits
         </span>
         <span>
           {w.departure} Departure · {w.stayover} Stayover · {w.priority}{" "}
           Priority
         </span>
-        {compact && <span>{w.outstanding} outstanding locally</span>}
+        {compact && (
+          <span>
+            {w.rooms ? w.outstanding + " rooms remaining" : "No assigned rooms"}
+          </span>
+        )}
       </div>
     );
   };
@@ -386,55 +454,18 @@ function WorksheetBoard({
         {r.makeUpRoom && <span>Make Up Room</span>}
         {r.priority && <span>Priority</span>}
       </div>
-      <p className="worksheet-room-task">
-        {r.tasks.join(" · ") || "No task supplied"}
-        {r.remarks.length > 0 && <small>{r.remarks.join(" · ")}</small>}
-      </p>
+      {(r.tasks.length > 0 || r.remarks.length > 0) && (
+        <p className="worksheet-room-task">
+          {r.tasks.join(" · ")}
+          {r.remarks.length > 0 && <small>{r.remarks.join(" · ")}</small>}
+        </p>
+      )}
       <div className="worksheet-room-bottom">
-        <span>
-          {r.credits === null ? "Credits unconfigured" : `${r.credits} credits`}{" "}
-          <small>
-            {r.creditSource === "OHIP"
-              ? "OHIP"
-              : r.creditSource === "local"
-                ? "Local rule"
-                : ""}
-          </small>
-        </span>
+        <span>{r.credits === null ? "-" : `${r.credits} credits`}</span>
         {sheet?.assignments[r.id] && (
           <small>Local: {sheet.localProgress[r.id] || "assigned"}</small>
         )}
       </div>
-      {sheet?.canManage && (
-        <select
-          className="worksheet-assign-to"
-          aria-label={`Assign room ${r.id} to`}
-          disabled={!sheet.feed.available}
-          value={sheet.assignments[r.id] || ""}
-          onChange={(e) =>
-            change({
-              type: "rooms",
-              roomIds: [r.id],
-              attendantId: e.target.value || null,
-            })
-          }
-        >
-          <option value="">Unassigned</option>
-          {sheet.assignments[r.id] &&
-            !eligible.some((a) => a.id === sheet.assignments[r.id]) && (
-              <option value={sheet.assignments[r.id]} disabled>
-                {sheet.attendants.find((a) => a.id === sheet.assignments[r.id])
-                  ?.name || "Assigned staff"}{" "}
-                (unavailable)
-              </option>
-            )}
-          {eligible.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      )}
     </article>
   );
   const attendantCard = (id: string, compact = false) => {
@@ -476,32 +507,42 @@ function WorksheetBoard({
           <div>
             <GripVertical size={16} />
             <h3>{att.name}</h3>
-            {(!att.active || !att.available) && (
-              <Badge tone="amber">Unavailable</Badge>
+            <small>{staffReason(att)}</small>
+            {sheet?.manager && canSchedule(att) && (
+              <button
+                disabled={pending || saving}
+                onClick={() => move({ type: "schedule", userIds: [id] })}
+              >
+                Add to Shift
+              </button>
             )}
           </div>
           {sheet?.manager && (
             <select
               aria-label={`Supervisor for ${att.name}`}
               value={sheet.team[id] || ""}
-              disabled={!att.active || !att.available}
-              onChange={(e) =>
-                e.target.value &&
-                change({
+              disabled={!att.active}
+              onChange={(e) => {
+                if (!e.target.value) return;
+                const op: WorksheetOperation = {
                   type: "team",
                   attendantId: id,
                   supervisorId: e.target.value,
-                })
-              }
+                };
+                const ids = scheduleNeeded(op);
+                if (ids.length) setTeamAction({ op, ids });
+                else change(op);
+              }}
             >
               <option value="" disabled>
                 Choose supervisor
               </option>
               {sheet.supervisors
-                .filter((s) => s.active && s.available)
+                .filter((s) => s.active)
                 .map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
+                    {!s.available ? " - Not Scheduled" : ""}
                   </option>
                 ))}
             </select>
@@ -509,6 +550,8 @@ function WorksheetBoard({
           {!sheet?.manager &&
             sheet?.selfRole === "supervisor" &&
             sheet.canManage &&
+            att.active &&
+            att.available &&
             !sheet.team[id] && (
               <button
                 disabled={!att.active || !att.available}
@@ -576,33 +619,46 @@ function WorksheetBoard({
               </button>
             </div>
           </header>
-          {sheet.manager && (
-            <ShiftControls
-              propertyId={propertyId}
-              date={date}
-              shiftId={shiftId}
-              shifts={shifts}
-              disabled={pending || saving}
-            />
-          )}
-          {!sheet.rosterConfigured && (
-            <p className="worksheet-warning">
-              No staff roster for this business date and shift.{" "}
-              {sheet.manager
-                ? "Use Manage Shift Staff to select staff on duty."
-                : "Ask your manager to schedule staff before assigning rooms."}
-            </p>
-          )}
           {printError && <p role="alert">{printError}</p>}
           {(pending || saving) && (
             <p>Print is unavailable until local changes finish saving.</p>
           )}
+          {teamAction && (
+            <div
+              className="worksheet-inline-action"
+              role="region"
+              aria-label="Add team staff to shift and assign"
+            >
+              <p>
+                Add{" "}
+                {[...sheet.supervisors, ...sheet.attendants]
+                  .filter((s) => teamAction.ids.includes(s.id))
+                  .map((s) => s.name)
+                  .join(", ")}{" "}
+                to {sheet.shift.name} on {date} and save the selected
+                assignment.
+              </p>
+              <button
+                disabled={pending || saving}
+                onClick={() => {
+                  change(teamAction.op, teamAction.ids);
+                  setTeamAction(null);
+                }}
+              >
+                Add to Shift &amp; Assign
+              </button>
+              <button onClick={() => setTeamAction(null)}>Cancel</button>
+            </div>
+          )}
           <div className="worksheet-context">
             <span>
-              Property business date
+              Business Date
               <strong>
-                {date} ·{" "}
-                {user.properties.find((p) => p.id === propertyId)?.timezone}
+                {new Date(date + "T12:00:00Z").toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}
               </strong>
             </span>
             <label>
@@ -642,7 +698,7 @@ function WorksheetBoard({
                 "Unsaved local changes…"
               ) : (
                 <>
-                  <CheckCircle2 size={16} /> All local changes saved
+                  <CheckCircle2 size={16} /> Saved
                 </>
               )}
             </span>
@@ -652,14 +708,23 @@ function WorksheetBoard({
               {error}
             </p>
           )}
-          {sheet.warnings.map((w) => (
-            <p role="alert" className="worksheet-warning" key={w}>
-              <AlertCircle size={16} />
-              {w}
-            </p>
-          ))}
+          {sheet.warnings
+            .filter(
+              (w) =>
+                !/^(Workload imbalance:|Credits not configured|Some assigned staff|Room-specific supervisor exceptions)/.test(
+                  w,
+                ),
+            )
+            .map((w) => (
+              <p role="alert" className="worksheet-warning" key={w}>
+                <AlertCircle size={16} />
+                {w}
+              </p>
+            ))}
           {sheet.feed.taskError && (
-            <p className="worksheet-warning">{sheet.feed.taskError}</p>
+            <p className="worksheet-feed-note">
+              Room tasks are unavailable. Room assignment can continue.
+            </p>
           )}
           {sheet.missingAssignedRooms > 0 && (
             <p className="worksheet-warning">
@@ -687,7 +752,11 @@ function WorksheetBoard({
           ) : (
             <>
               {(sheet.manager || sheet.selfRole === "supervisor") && (
-                <FloorAssignment sheet={sheet} move={change} />
+                <FloorAssignment
+                  sheet={sheet}
+                  move={change}
+                  disabled={pending || saving}
+                />
               )}
               <div className="worksheet-summary">
                 <div>
@@ -727,19 +796,20 @@ function WorksheetBoard({
                     <div>
                       <span>Total Credits</span>
                       <strong>
-                        {
-                          workload(
+                        {(() => {
+                          const w = workload(
                             sheet.rooms.filter((r) => sheet.assignments[r.id]),
-                          ).credits
-                        }
+                          );
+                          return w.missingCredits ? "-" : w.credits;
+                        })()}
                       </strong>
                     </div>
                   </>
                 )}
               </div>
               <div className="worksheet-selection-summary" role="status">
-                {matching.length} matching rooms ?{" "}
-                {Math.min(limit, matching.length)} visible rooms ?{" "}
+                {matching.length} matching rooms ·{" "}
+                {Math.min(limit, matching.length)} visible rooms ·{" "}
                 {selected.length} selected rooms (
                 {selected.filter((id) => !visible.has(id)).length} outside
                 visible results)
@@ -982,8 +1052,33 @@ function WorksheetBoard({
                       </option>
                     ))}
                   </select>
+                  {target &&
+                    target !== "unassigned" &&
+                    scheduleNeeded({
+                      type: "distribute",
+                      roomIds: selected,
+                      attendantIds: [target],
+                      mode: "equal",
+                    }).length > 0 && (
+                      <p>
+                        This will add{" "}
+                        {[...sheet.supervisors, ...sheet.attendants]
+                          .filter((s) =>
+                            scheduleNeeded({
+                              type: "distribute",
+                              roomIds: selected,
+                              attendantIds: [target],
+                              mode: "equal",
+                            }).includes(s.id),
+                          )
+                          .map((s) => s.name)
+                          .join(", ")}{" "}
+                        to {sheet.shift.name} on {date} and assign the selected
+                        rooms.
+                      </p>
+                    )}
                   <button
-                    disabled={!target}
+                    disabled={!target || pending || saving}
                     onClick={() =>
                       change(
                         target === "unassigned"
@@ -998,10 +1093,28 @@ function WorksheetBoard({
                               attendantIds: [target],
                               mode: "equal",
                             },
+                        target === "unassigned"
+                          ? []
+                          : scheduleNeeded({
+                              type: "distribute",
+                              roomIds: selected,
+                              attendantIds: [target],
+                              mode: "equal",
+                            }),
                       )
                     }
                   >
-                    Assign selected <ArrowRight size={16} />
+                    {target &&
+                    target !== "unassigned" &&
+                    scheduleNeeded({
+                      type: "distribute",
+                      roomIds: selected,
+                      attendantIds: [target],
+                      mode: "equal",
+                    }).length
+                      ? "Add to Shift & Assign"
+                      : "Assign selected"}{" "}
+                    <ArrowRight size={16} />
                   </button>
                   <button onClick={() => setSelected([])}>
                     Clear selection
@@ -1101,22 +1214,6 @@ function WorksheetBoard({
                   </section>
                 )}
                 <div className="worksheet-supervisors">
-                  {sheet.canManage &&
-                    sheet.attendants.some((a) => !sheet.team[a.id]) && (
-                      <section className="worksheet-roster">
-                        <h2>Available Attendants</h2>
-                        <p>
-                          {sheet.manager
-                            ? "Drag into a supervisor group, or choose a supervisor."
-                            : "Choose an available registered attendant, or drop a room onto their card to add them to My Team."}
-                        </p>
-                        <div>
-                          {sheet.attendants
-                            .filter((a) => !sheet.team[a.id])
-                            .map((a) => attendantCard(a.id, true))}
-                        </div>
-                      </section>
-                    )}
                   {sheet.supervisors.map((spv) => (
                     <section
                       key={spv.id}
@@ -1145,6 +1242,24 @@ function WorksheetBoard({
                           </h2>
                         </div>
                         {sheet.selfRole === "supervisor" && <p>{spv.name}</p>}
+                        {
+                          <small>
+                            {staffReason(spv)}
+                            {!sheet.manager && canSchedule(spv)
+                              ? " - ask your HK Manager to add you to this shift."
+                              : ""}
+                          </small>
+                        }
+                        {sheet.manager && canSchedule(spv) && (
+                          <button
+                            disabled={pending || saving}
+                            onClick={() =>
+                              move({ type: "schedule", userIds: [spv.id] })
+                            }
+                          >
+                            Add to Shift
+                          </button>
+                        )}
                         <p className="worksheet-scope-label">
                           Assigned floors:{" "}
                           {sheet.supervisorFloors?.[spv.id]?.join(", ") ||
@@ -1172,15 +1287,29 @@ function WorksheetBoard({
                       )}
                     </section>
                   ))}
+                  {sheet.selfRole !== "attendant" &&
+                    sheet.attendants.some((a) => !sheet.team[a.id]) && (
+                      <section className="worksheet-roster">
+                        <h2>Room Attendants</h2>
+                        <p>
+                          {sheet.manager
+                            ? "Drag into a supervisor group, or choose a supervisor."
+                            : "Choose an available registered attendant, or drop a room onto their card to add them to My Team."}
+                        </p>
+                        <div>
+                          {sheet.attendants
+                            .filter((a) => !sheet.team[a.id])
+                            .map((a) => attendantCard(a.id, true))}
+                        </div>
+                      </section>
+                    )}
                 </div>
               </div>
               {!sheet.supervisors.length && (
                 <Empty text="No registered Housekeeping supervisor with valid property membership is available." />
               )}
               <p className="worksheet-footnote">
-                Current OPERA room status is read-only. Local completion is
-                independent of Dirty / Clean / Inspected. Credits are labeled
-                OHIP or Local rule; unconfigured credits are not guessed.
+                Assignments are saved locally. OPERA remains read-only.
               </p>
             </>
           )}

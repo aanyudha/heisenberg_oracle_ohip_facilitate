@@ -2,6 +2,54 @@
   --worksheet-line: #dce5e2;
   --worksheet-muted: #627974;
 }
+.worksheet-inline-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  margin: 12px 0;
+  border: 1px solid var(--worksheet-line);
+  border-radius: 8px;
+  background: #f3f7f5;
+}
+.worksheet-inline-action p {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 13px;
+}
+.worksheet-staff-reason {
+  display: block;
+  font-size: 12px;
+  color: #755322;
+  line-height: 1.5;
+  margin: 6px 0;
+}
+.worksheet-staff-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  background: #f3f7f5;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.worksheet-feed-note {
+  color: var(--worksheet-muted);
+  font-size: 12px;
+}
+.worksheet-workload details {
+  font-size: 11px;
+}
+.worksheet-roster-editor label small {
+  display: block;
+  font-weight: 400;
+  color: var(--worksheet-muted);
+}
+.worksheet-roster-editor {
+  scroll-margin-top: 90px;
+}
 .worksheet-root header {
   height: auto;
   position: static;

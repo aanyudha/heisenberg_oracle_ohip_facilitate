@@ -301,21 +301,19 @@ try {
   await manager.getByLabel("Filter floor", { exact: true }).selectOption("");
   await manager.getByLabel("Housekeeping shift").selectOption("PM");
   await manager
-    .getByText(/No staff roster for this business date and shift/)
-    .waitFor();
-  await manager
-    .getByRole("button", { name: "Manage Shift Staff", exact: true })
+    .locator('[data-supervisor-id="' + f.s1.id + '"]')
+    .getByRole("button", { name: "Add to Shift", exact: true })
     .click();
-  const roster = manager.getByRole("region", { name: "Shift staff roster" });
-  await roster.waitFor();
-  await roster
-    .getByRole("checkbox", { name: "Supervisor One", exact: true })
-    .check();
-  await roster
-    .getByRole("checkbox", { name: "Attendant One", exact: true })
-    .check();
-  await roster
-    .getByRole("button", { name: "Save shift staff (2)", exact: true })
+  await until(
+    async () =>
+      (await f.worksheet(f.admin, "PM")).supervisors.find(
+        (s: any) => s.id === f.s1.id,
+      ).available,
+    "Supervisor not added inline",
+  );
+  await manager
+    .locator('[data-attendant-id="' + f.a1.id + '"]')
+    .getByRole("button", { name: "Add to Shift", exact: true })
     .click();
   await until(
     async () =>
@@ -326,7 +324,7 @@ try {
   );
   check(
     Object.keys((await f.worksheet(f.admin, "PM")).assignments).length === 0,
-    "Manage Shift Staff saves selected PM roster without leaking AM room assignments",
+    "Inline Add to Shift saves selected PM staff without leaking AM room assignments",
   );
   await manager.context().close();
   // Preserve production per-IP rate limiting; fresh mobile actor starts next window.

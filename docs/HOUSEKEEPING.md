@@ -1,5 +1,21 @@
 # Housekeeping Worksheet
 
+## Daily workflow - English, without configuration detours (2026-11-17)
+
+All Housekeeping operational labels are English. User Management remains the single source for roles, active/archive status and property membership; the worksheet does not configure those identities.
+
+Use Business Date and the existing Shift selector at the top. For a scheduled Supervisor, select a floor and choose the Supervisor; the local assignment saves immediately. Select several floors to assign them together. Eligible registered staff remain visible when Not Scheduled; scheduled staff are listed first. Inactive/wrong-role/wrong-property references remain non-assignable.
+
+For a Not Scheduled Supervisor, choosing them displays a concise inline action naming the person, date, shift and floor(s). **Add to Shift & Assign** explicitly adds only that person to the selected shift and saves the assignment in one transaction. Managers can also use an individual **Add to Shift** button beside registered staff. No all-present shortcut, role form, roster setup wizard, duplicate shift definitions or advanced shift configuration panel is part of the daily worksheet. Existing advanced settings remain at /operations/rooms-settings.
+
+Supervisors use My Floors: select rooms, select a Room Attendant and Assign. For multiple Room Attendants, select them in Distribute, choose Equal Rooms or Balanced Credits, preview, and confirm once. For a Manager assigning rooms to an unallocated Room Attendant, an unambiguous single Supervisor covering the selected rooms supplies the existing local team link in the same command. The assignment retains explicit shift consent: if selected people are Not Scheduled, their names/date/shift appear with **Add to Shift & Assign**. Supervisors cannot schedule staff or bypass presence checks; only authorized Managers may do so. Drag/drop and bulk assignment remain. Repetitive per-room dropdowns have been removed in favor of the selection toolbar, which also works for a single room.
+
+Scheduling uses a schedule operation inside the existing worksheet command, followed by the existing floor/team/room operations. It uses the same property lock, current membership/role checks, active shift validation, saved revision and idempotency key. All schedule and assignment changes roll back on failure. Combined actions record attendance before/after in the existing audit/history JSON; no schema changes or new endpoint routes are required. Undo reverses the combined action and restores previous availability; newly created schedule rows become unavailable instead of deleting assignment history/foreign-key references. Existing room ownership is never silently deleted during floor changes.
+
+The main screen shows concise English schedule states, assignment counts and genuine action-required errors. Missing credits show a dash; allocation remains usable. Generic missing-credit warnings, empty task placeholders, configuration instructions and internal revision text do not cover the workspace. Saved assignments, A4 print/PDF, Supervisor/Room Attendant grouping, coverage-unassigned rooms, signatures and saved-revision/snapshot revalidation are preserved.
+
+Validation uses disposable databases and separate ports only. The 274-room browser fixture checks both scheduled and unscheduled staff, explicit inline scheduling, 20-to-one and 30-to-three room allocation, actual saved rows, WebSocket/reload/shift scope, English-only operational text, mobile and PDF text/totals. Before/after screenshots and results are under artifacts/hk-simple. See [current delivery report](HOUSEKEEPING_SIMPLIFICATION_VALIDATION.md). Historical usability reports describe superseded screens.
+
 Daily workflow: **OPERA data → drag & drop → Print Worksheet / My Worksheet**.
 
 ## Operational refinement (2026-11-13)

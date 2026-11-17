@@ -5,6 +5,7 @@ import {
   type WorksheetOperation,
   type WorksheetStaff,
 } from "@hospitality/contracts";
+import { canSchedule, supervisorForRooms } from "../housekeeping-labels";
 export default function BulkDistribution({
   sheet,
   selected,
@@ -15,7 +16,7 @@ export default function BulkDistribution({
   sheet: Worksheet;
   selected: string[];
   eligible: WorksheetStaff[];
-  move: (op: WorksheetOperation) => void;
+  move: (op: WorksheetOperation, scheduleIds?: string[]) => void;
   disabled: boolean;
 }) {
   const [targets, setTargets] = useState<string[]>([]),
@@ -29,6 +30,18 @@ export default function BulkDistribution({
     [sheet, selected, targets, mode],
   );
   const invalid = targets.some((id) => !eligible.some((a) => a.id === id));
+  const shiftStaff = sheet.manager
+    ? [...sheet.attendants, ...sheet.supervisors].filter(
+        (s) =>
+          canSchedule(s) &&
+          (targets.includes(s.id) ||
+            targets.some(
+              (id) =>
+                (sheet.team[id] || supervisorForRooms(sheet, selected)) ===
+                s.id,
+            )),
+      )
+    : [];
   return (
     <details className="worksheet-distribute">
       <summary>Distribute to multiple attendants</summary>
@@ -49,6 +62,7 @@ export default function BulkDistribution({
               }}
             />
             {a.name}
+            {!a.available ? " - Not Scheduled" : ""}
           </label>
         ))}
       </fieldset>
@@ -125,24 +139,30 @@ export default function BulkDistribution({
               </tbody>
             </table>
           </div>
-          <p>
-            Every selected room goes to one attendant. Current saved revision:{" "}
-            {sheet.revision}. Existing load excludes selected rooms before
-            redistribution.
-          </p>
+          {shiftStaff.length > 0 && (
+            <p>
+              This will add {shiftStaff.map((s) => s.name).join(", ")} to{" "}
+              {sheet.shift.name} on {sheet.scope.date} and assign these rooms.
+            </p>
+          )}
           <button
             disabled={disabled || invalid}
             onClick={() => {
-              move({
-                type: "distribute",
-                roomIds: selected,
-                attendantIds: targets,
-                mode,
-              });
+              move(
+                {
+                  type: "distribute",
+                  roomIds: selected,
+                  attendantIds: targets,
+                  mode,
+                },
+                shiftStaff.map((s) => s.id),
+              );
               setPreview(false);
             }}
           >
-            Confirm distribution
+            {shiftStaff.length
+              ? "Add to Shift & Assign"
+              : "Confirm distribution"}
           </button>
         </section>
       )}

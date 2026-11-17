@@ -40,9 +40,20 @@ export type WorksheetStaff = {
   name: string;
   available: boolean;
   active: boolean;
+  eligibilityReason?:
+    | "inactive"
+    | "wrong_role"
+    | "wrong_property"
+    | "not_scheduled"
+    | "off_shift"
+    | "not_registered"
+    | null;
+  assignmentBlockReason?:
+    "supervisor_required" | "supervisor_unavailable" | null;
 };
 export { distributeRooms } from "./distribution.js";
 export type WorksheetOperation =
+  | { type: "schedule"; userIds: string[] }
   | {
       type: "distribute";
       roomIds: string[];
