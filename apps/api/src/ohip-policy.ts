@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { validateGateway } from "./ohip-gateway.js";
 import { createHash, randomUUID } from "node:crypto";
+import { traffic } from "./traffic.js";
 export const OCIM_SCOPE = "urn:opc:hgbu:ws:__myscopes__";
 export const POLICY_CODE = "OHIP_READ_ONLY_POLICY";
 export class OhipReadOnlyError extends Error {
@@ -417,11 +418,19 @@ export class OhipHttpClient {
           this.route,
           this.scope,
         );
-        const dispatch = () =>
-          this.transport(base + path, {
-            ...options,
-            headers: { ...options.headers, "x-request-id": correlationId },
-          });
+        const dispatch = async () => {
+          let failed = true;
+          try {
+            const response = await this.transport(base + path, {
+              ...options,
+              headers: { ...options.headers, "x-request-id": correlationId },
+            });
+            failed = !response.ok;
+            return response;
+          } finally {
+            traffic.recordOhip(failed);
+          }
+        };
         const r = await (this.scope.dispatch
           ? this.scope.dispatch(dispatch)
           : dispatch());

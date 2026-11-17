@@ -28,6 +28,8 @@ export async function appendEvent(
   );
 }
 export function realtime(db: Database) {
+  let closing = false;
+  const pending = new Set<Promise<void>>();
   const clients = new Set<{
     socket: WebSocket;
     user: Principal;
@@ -35,8 +37,16 @@ export function realtime(db: Database) {
     busy: boolean;
     alive: boolean;
   }>();
-  async function reconcile(c: typeof clients extends Set<infer T> ? T : never) {
-    if (c.busy) return;
+  function reconcile(c: typeof clients extends Set<infer T> ? T : never) {
+    const work = performReconcile(c);
+    pending.add(work);
+    void work.finally(() => pending.delete(work)).catch(() => {});
+    return work;
+  }
+  async function performReconcile(
+    c: typeof clients extends Set<infer T> ? T : never,
+  ) {
+    if (c.busy || closing) return;
     c.busy = true;
     try {
       if (c.user.expiresAt <= Date.now()) {
@@ -132,10 +142,12 @@ export function realtime(db: Database) {
       socket.on("error", () => clients.delete(c));
       await reconcile(c);
     },
-    close() {
+    async close() {
+      closing = true;
       clearInterval(timer);
       clearInterval(pingTimer);
       for (const c of clients) c.socket.close(1001);
+      await Promise.allSettled([...pending]);
     },
   };
 }

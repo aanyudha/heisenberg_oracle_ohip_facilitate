@@ -11,6 +11,7 @@ import {
   type OhipScope,
 } from "../apps/api/src/ohip-policy";
 import { loadConfig } from "../apps/api/src/config";
+import { traffic } from "../apps/api/src/traffic";
 const base = "https://gateway.example.oraclecloud.com",
   path = "/rsv/v1/hotels/HOTEL1/reservations/searches";
 const route: OhipRoute = {
@@ -46,6 +47,25 @@ const search = (): RequestInit => ({
     limit: 100,
     offset: 0,
   }),
+});
+it("counts OHIP dispatches and errors separately without counting blocked operations", async () => {
+  process.env.OHIP_ALLOWED_HOSTS = "gateway.example.oraclecloud.com";
+  const baseline = traffic.sample();
+  const transport = vi.fn(async () => new Response("fixture", { status: 502 }));
+  const client = new OhipHttpClient(
+    route,
+    scope(),
+    transport as typeof fetch,
+    undefined,
+  );
+  await client.request(base, path, search(), "searchHotelReservations");
+  await expect(
+    client.request(base, path, search(), "unknown-operation"),
+  ).rejects.toThrow();
+  expect(transport).toHaveBeenCalledTimes(1);
+  const measured = traffic.sample();
+  expect(measured.ohipRequests - baseline.ohipRequests).toBe(1);
+  expect(measured.ohipErrors - baseline.ohipErrors).toBe(1);
 });
 beforeEach(() => {
   process.env.OHIP_ALLOWED_HOSTS = "gateway.example.oraclecloud.com";

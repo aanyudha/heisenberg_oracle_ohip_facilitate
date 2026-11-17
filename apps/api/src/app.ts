@@ -26,6 +26,7 @@ import {
   APPROVED_OHIP_OPERATIONS,
 } from "./ohip-policy.js";
 import { documentRoutes } from "./openapi.js";
+import { traffic } from "./traffic.js";
 declare module "fastify" {
   interface FastifyRequest {
     principal: Principal;
@@ -44,11 +45,18 @@ export async function buildApp(
   options: { ohipTransport?: typeof fetch } = {},
 ) {
   const app = Fastify({ logger: false, bodyLimit: 65536, trustProxy: false });
+  traffic.attach(app);
   app.addHook("onRequest", async (req) => {
     if (blockedOracleApi(req.method, req.url)) throw new OhipReadOnlyError();
   });
   const rt = realtime(db);
+  app.addHook("preClose", async () => rt.close());
   await app.register(helmet, {
+    // HTTP development/LAN must not upgrade its same-origin assets to HTTPS.
+    // Production network origins are still required to use HTTPS by loadConfig.
+    crossOriginOpenerPolicy: process.env.APP_ORIGIN?.startsWith("http:")
+      ? false
+      : undefined,
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
@@ -56,6 +64,9 @@ export async function buildApp(
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "https:", "data:"],
         connectSrc: ["'self'", "ws:", "wss:"],
+        upgradeInsecureRequests: process.env.APP_ORIGIN?.startsWith("http:")
+          ? null
+          : [],
       },
     },
   });
@@ -323,6 +334,7 @@ export async function buildApp(
     };
   });
   app.get("/api/ws", { websocket: true }, async (socket, req) => {
+    traffic.trackWebSocket(socket);
     try {
       if (req.headers.origin !== process.env.APP_ORIGIN)
         throw fail(403, "Origin rejected");
@@ -1075,6 +1087,5 @@ export async function buildApp(
       productionValidated: false,
     };
   });
-  app.addHook("onClose", async () => rt.close());
   return app;
 }

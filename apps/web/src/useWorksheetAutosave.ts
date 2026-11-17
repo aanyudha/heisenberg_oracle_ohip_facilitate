@@ -3,17 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { Worksheet, WorksheetOperation } from "@hospitality/contracts";
 import { write } from "./api";
 import { moveWorksheet } from "./worksheet-model";
-
-function mutationId() {
-  if (globalThis.crypto.randomUUID) return globalThis.crypto.randomUUID();
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6] & 15) | 64;
-  bytes[8] = (bytes[8] & 63) | 128;
-  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
-    "",
-  );
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
+import { browserId as mutationId } from "./browser-id";
 
 export function useWorksheetAutosave(server: Worksheet | undefined) {
   const client = useQueryClient();

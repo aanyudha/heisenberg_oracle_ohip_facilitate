@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - Startup reliability and LAN diagnostics (2026-11-17)
+
+- Fixed the reproduced LAN HTTP blank screen: HTTP origins no longer receive HTTPS asset-upgrade directives. Kept strict script CSP, authentication, origin/CSRF/cookie checks and production HTTPS requirements. Added bootstrap failure UI and root React error boundary; local shift IDs use cryptographic UUID fallback on LAN HTTP.
+- Extended the existing startup migrator with immutable historical checksums, conservative additive SQL policy, transaction/advisory locks, companion metadata/results/durations, legacy baseline provenance, schema readiness checks and DB-managed recoverable embedded backups. No historical SQL files were edited. Missing/invalid production embedded data paths fail closed.
+- Added ready-only application/database/network/integration reporting and optional in-place native TTY traffic dashboard. Socket byte deltas include HTTP/WebSocket without double counting; OHIP dispatch/error counters remain separate. Redirected/Docker startup uses structured JSON.
+- Added disposable migration/traffic/runtime/browser verification and deployment documentation. Preserved application modules, data, Housekeeping, Telephone, authentication/RBAC and OHIP strict read-only. Owner runtime/database and production deployment were not changed.
+
 ## Unreleased - Housekeeping operational refinement (2026-11-13)
 
 - Added HK job classification to existing User Management, reusing identity/property grants and Housekeeping metadata. Removed staff role editing from Housekeeping configuration and closed its legacy write API (410); classification and explicit property authorization edits now use User Management RBAC and a shared classification service.

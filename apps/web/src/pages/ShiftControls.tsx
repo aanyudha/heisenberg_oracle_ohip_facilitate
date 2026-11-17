@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useData, write } from "../api";
+import { browserId } from "../browser-id";
 type Shift = {
   id: string;
   name: string;
@@ -97,7 +98,7 @@ export default function ShiftControls({
             const f = new FormData(e.currentTarget);
             void save("shifts", {
               propertyId,
-              id: editing?.id || crypto.randomUUID(),
+              id: editing?.id || browserId(),
               name: f.get("name"),
               startsAt: f.get("startsAt"),
               endsAt: f.get("endsAt"),

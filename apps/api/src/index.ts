@@ -5,16 +5,18 @@ import { buildApp } from "./app.js";
 import { worker } from "./worker.js";
 import { seed } from "./seed.js";
 import { frontendPath } from "./paths.js";
+import {
+  integrationLabel,
+  integrationSummary,
+  printStartup,
+  verifyFrontendBuild,
+} from "./startup-report.js";
+import { startTrafficMeter } from "./traffic.js";
 import staticFiles from "@fastify/static";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 
 async function main() {
   const config = loadConfig();
-  if (!existsSync(join(frontendPath, "index.html")))
-    throw Error(
-      "Frontend build is missing. Run npm run build before npm start.",
-    );
+  const assets = await verifyFrontendBuild();
   applyConfig(config);
   const release = await acquireDeploymentLock();
   const db = await openDb(false, config).catch(async (error) => {
@@ -25,7 +27,9 @@ async function main() {
   let closeHookRegistered = false;
   try {
     await db.checkConnection();
-    await migrate(db);
+    const migration = await migrate(db);
+    let integration = await integrationSummary(db);
+    let nextIntegrationCheck = Date.now() + 30000;
     if (
       config.demoSeed &&
       !(await db.query(sql`SELECT 1 FROM users LIMIT 1`)).length
@@ -55,12 +59,18 @@ async function main() {
       return reply.header("Cache-Control", "no-cache").sendFile("index.html");
     });
     const w = worker(db);
+    let stopMeter = () => {};
     let pending: Promise<void> | undefined;
     const lifecycle: { timer?: ReturnType<typeof setInterval> } = {};
     const run = () => {
       if (pending) return;
-      pending = w
-        .tick()
+      pending = (async () => {
+        await w.tick();
+        if (Date.now() >= nextIntegrationCheck) {
+          integration = await integrationSummary(db);
+          nextIntegrationCheck = Date.now() + 30000;
+        }
+      })()
         .catch(() =>
           console.error(
             "Integration worker tick failed; inspect service health",
@@ -70,9 +80,12 @@ async function main() {
           pending = undefined;
         });
     };
-    app.addHook("onClose", async () => {
+    app.addHook("preClose", async () => {
+      stopMeter();
       if (lifecycle.timer) clearInterval(lifecycle.timer);
       await pending;
+    });
+    app.addHook("onClose", async () => {
       try {
         await db.close();
       } finally {
@@ -80,16 +93,46 @@ async function main() {
       }
     });
     closeHookRegistered = true;
-    await app.listen({ port: config.port, host: config.host });
+    try {
+      await app.listen({ port: config.port, host: config.host });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EADDRINUSE")
+        throw Error(
+          `Cannot listen on ${config.host}:${config.port}: address is already in use. Stop the owning application or choose an unused APP_PORT.`,
+        );
+      if (code === "EADDRNOTAVAIL")
+        throw Error(
+          `Cannot bind APP_HOST=${config.host}: this IP is not assigned to this computer. Set APP_HOST to a local interface IP (or explicitly 0.0.0.0). APP_URL remains the browser URL.`,
+        );
+      throw error;
+    }
+    printStartup(config, migration, integration, assets);
+    stopMeter = startTrafficMeter(config, undefined, () =>
+      integrationLabel(integration),
+    );
     lifecycle.timer = setInterval(run, 5000);
     run();
-    for (const signal of ["SIGINT", "SIGTERM"])
-      process.once(signal, () => {
-        void app!.close();
+    let closing: Promise<void> | undefined;
+    const shutdown = () => {
+      closing ||= app!
+        .close()
+        .catch(() => {
+          console.error("Shutdown failed; inspect service health.");
+          process.exitCode = 1;
+        })
+        .finally(() => {
+          if (process.connected) process.disconnect();
+        });
+    };
+    for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, shutdown);
+    // IPC supports graceful disposable Windows child tests without fake SIGINT.
+    if (process.send)
+      process.on("message", (message) => {
+        if (message === "shutdown") {
+          shutdown();
+        }
       });
-    console.log(
-      `${config.name}: ${config.origin} (mode=${config.mode}, database=${config.databaseType}, port=${config.port}, connection=ready)`,
-    );
   } catch (error) {
     if (app) await app.close();
     if (!closeHookRegistered) {

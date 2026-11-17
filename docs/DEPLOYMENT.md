@@ -7,6 +7,11 @@ Semua konfigurasi runtime berasal dari `.env` pada root project. Loader terpusat
 | Variabel | Nilai / cara mengubah |
 | --- | --- |
 | `APP_MODE` | Wajib `native` atau `docker`. Pilih sebelum menjalankan command; `npm start` hanya native, startup container hanya docker. |
+| `APP_HOST` | IP listener native, default `127.0.0.1`. Untuk akses LAN langsung, isi IP LAN server; `0.0.0.0` mendengarkan semua interface IPv4. Docker tetap memakai `0.0.0.0` internal container. Tidak mengubah origin browser `APP_URL`. |
+| `DB_MIGRATION_MODE` | `auto` (default dan satu-satunya mode). Checksum/history, pending migration yang diizinkan, backup embedded dan schema readiness diperiksa sebelum listen. SQL berisiko ditolak. |
+| `STARTUP_DASHBOARD` | `auto` (default) atau `off`. Native interactive TTY menampilkan banner dan meter; off/redirect/Docker menggunakan startup JSON dan log biasa. |
+| `TRAFFIC_METER_ENABLED` | `true` (default) atau `false`. Meter mengukur traffic server aplikasi, bukan NIC Windows. |
+| `TRAFFIC_METER_INTERVAL_MS` | Default `1000`; integer `250` sampai `60000`. Hanya interval meter terminal, bukan polling OHIP. |
 | `APP_PORT` | Default `3000`; angka integer 1–65535. Dipakai listener, pemetaan port Compose, dan healthcheck. |
 | `NODE_ENV` | `production` (default), `development`, atau `test`. Production mewajibkan kunci enkripsi dan melarang demo seed. |
 | `APP_NAME` | Default `Hotel Operations`; 1–120 karakter tanpa karakter kontrol. Nama pada status startup, tidak mengganti branding tenant. |
@@ -37,7 +42,7 @@ Variabel lama `DATABASE_URL`, `LOCAL_DEMO`, `LOCAL_DB_PATH`, `PORT`, `HOST`, `AP
 2. Pilih DB_TYPE=embedded (tanpa DB credentials), atau postgres dan isi alamat server/database/user/password yang sudah diprovisikan.
 3. Jalankan `npm install`, `npm run build`, `npm start`.
 
-Default production lokal dapat memakai embedded dan HTTP loopback. Untuk akses jaringan, pakai reverse proxy HTTPS dengan forwarding WebSocket dan APP_URL publik yang benar. Listener native berada di loopback. Akun production tidak dibuat otomatis; pertahankan proses provisioning identitas yang sudah ada.
+Default production lokal dapat memakai embedded dan HTTP loopback. Untuk production jaringan, pakai reverse proxy HTTPS dengan forwarding WebSocket dan APP_URL publik yang benar. Listener native default berada di loopback. Untuk pengujian LAN langsung dengan HTTP, gunakan `NODE_ENV=development`, `COOKIE_SECURE=false`, `APP_HOST=192.168.1.122`, `APP_PORT=3501`, dan `APP_URL=http://192.168.1.122:3501` (sesuaikan IP server). Jangan memakai backslash sebelum titik dua di URL. Rebuild setelah perubahan source dan restart setelah perubahan `.env`. Akun production tidak dibuat otomatis; pertahankan proses provisioning identitas yang sudah ada.
 
 ## Docker
 
@@ -52,6 +57,8 @@ Service config-check memakai image yang sama dan menolak konfigurasi tidak valid
 ## Startup, perubahan konfigurasi, dan persistensi
 
 Urutan startup: baca `.env` ? validasi schema/mode/secret ? ambil deployment lock ? periksa koneksi DB (`SELECT 1`, timeout PostgreSQL 5 detik) ? migrasi transaksi idempotent ? optional demo seed ? Fastify listener ? worker. Nama, mode, jenis DB, port, dan `connection=ready` dicetak setelah listen berhasil; kredensial, key, dan password demo tidak dicetak. Error autentikasi, database tidak ada, dan koneksi gagal memberikan petunjuk tanpa menampilkan error driver mentah.
+
+Startup kini juga memverifikasi manifest Vite beserta seluruh chunk/CSS, memeriksa checksum/history, mengambil backup PGlite yang konsisten, memblokir migration baru berisiko, lalu memverifikasi kolom schema sebelum HTTP. Banner/JSON READY hanya dicetak setelah listen berhasil. `schema_migrations` lama dipertahankan; metadata/hasil/durasi disimpan dalam tabel pendamping. Production embedded menolak DB_FILE hilang, kosong atau invalid; tidak ada fallback ke database baru. [Rincian migrasi, backup/restore, traffic meter dan acceptance](STARTUP.md).
 
 Migrasi menggunakan advisory transaction lock dan tabel schema_migrations; restart tidak menjalankan ulang versi yang sudah diterapkan. Migrasi OHIP 0002 menambahkan ohip_connections dan ohip_connection_properties, serta memindahkan credentials lama secara transaksional; kolom chain historis dipertahankan. Lihat [OHIP OCIM](OHIP_OCIM.md). `npm run db:migrate` menggunakan loader yang sama; seed CLI juga menolak production. Build menghasilkan `dist/server/`, `dist/public/`, dan `dist/migrations/`; hanya dist/public yang disajikan sebagai static files. File `.env` dan kredensial DB tidak diberikan melalui endpoint API.
 

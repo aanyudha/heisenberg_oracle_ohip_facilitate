@@ -26,6 +26,19 @@ const hostname = z
 const schema = z.strictObject({
   APP_MODE: z.enum(["native", "docker"]),
   APP_PORT: port.default(3000),
+  APP_HOST: z
+    .string()
+    .refine((v) => isIP(v) !== 0)
+    .default("127.0.0.1"),
+  DB_MIGRATION_MODE: z.literal("auto").default("auto"),
+  STARTUP_DASHBOARD: z.enum(["auto", "off"]).default("auto"),
+  TRAFFIC_METER_ENABLED: z.enum(["true", "false"]).default("true"),
+  TRAFFIC_METER_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .pipe(z.number().int().min(250).max(60000))
+    .default(1000),
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
   APP_NAME: z
     .string()
@@ -202,9 +215,13 @@ export function loadConfig(
     );
   return {
     name: env.APP_NAME,
+    runtimeEnvironment: env.NODE_ENV,
+    startupDashboard: env.STARTUP_DASHBOARD,
+    trafficMeterEnabled: env.TRAFFIC_METER_ENABLED === "true",
+    trafficMeterInterval: env.TRAFFIC_METER_INTERVAL_MS,
     mode: env.APP_MODE,
     port: env.APP_PORT,
-    host: env.APP_MODE === "docker" ? "0.0.0.0" : "127.0.0.1",
+    host: env.APP_MODE === "docker" ? "0.0.0.0" : env.APP_HOST,
     origin: env.APP_URL,
     production: env.NODE_ENV === "production",
     databaseType: env.DB_TYPE,

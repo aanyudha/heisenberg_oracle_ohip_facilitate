@@ -53,6 +53,12 @@ npm start
 
 Embedded menggunakan PGlite, sebuah PostgreSQL embedded yang persisten. `DB_FILE=./data/app.db` adalah **direktori data**, bukan file SQLite. Untuk PostgreSQL eksternal, ubah `DB_TYPE=postgres` dan isi `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, serta `DB_SSL` di `.env`.
 
+`npm.cmd start` memvalidasi config, manifest/aset frontend, koneksi DB, checksum/history migration dan schema sebelum membuka HTTP/WebSocket. `DB_MIGRATION_MODE=auto` menerapkan pending migration yang diizinkan, memakai lock dan transaksi; versi yang sudah diterapkan dilewati. Backup PGlite melalui API database dibuat sebelum pending migration. Production embedded menolak path yang hilang/kosong agar tidak membuat pengganti database tanpa sengaja. Provision database baru secara eksplisit dalam development terlebih dahulu; jangan mengganti path/key database yang sudah digunakan.
+
+Untuk LAN development HTTP, gunakan `APP_HOST=192.168.1.122`, `APP_PORT=3501`, `APP_URL=http://192.168.1.122:3501`, `NODE_ENV=development`, `COOKIE_SECURE=false`. `APP_HOST` adalah interface listener, `APP_URL` adalah origin browser; `APP_HOST=0.0.0.0` opsional untuk semua interface IPv4. Bind spesifik tidak menjamin localhost ikut mendengarkan. Production jaringan tetap wajib HTTPS dan secure cookies. Frontend memakai API/WebSocket same-origin; startup yang gagal menampilkan pesan, bukan halaman kosong.
+
+Banner READY dicetak setelah listen berhasil, dengan mode Native/Docker, engine DB, migration, bind/URL, readiness serta status OHIP tersimpan (bukan klaim live sehat). `STARTUP_DASHBOARD=auto`, `TRAFFIC_METER_ENABLED=true`, `TRAFFIC_METER_INTERVAL_MS=1000` menampilkan **APPLICATION SERVER TRAFFIC** di terminal interaktif: throughput socket HTTP/WebSocket, HTTP rate/status/latency, WS clients/messages dan counter OHIP terpisah. Redirect/service/Docker menggunakan log JSON tanpa animasi. Ctrl+C menghentikan meter dan menutup server. [Workflow, backup, batas keamanan dan bukti validasi](docs/STARTUP.md).
+
 ## Docker
 
 Pilih di `.env`:

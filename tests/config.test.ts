@@ -15,11 +15,37 @@ describe("deployment configuration", () => {
   it("native defaults to persistent embedded without database credentials", () => {
     expect(loadConfig(base)).toMatchObject({
       mode: "native",
+      host: "127.0.0.1",
       port: 3000,
       databaseType: "embedded",
       database: undefined,
     });
     expect(loadConfig(base).databasePath).toMatch(/data[\\/]app.db$/);
+  });
+  it("supports an explicit native LAN listener independently of the browser origin", () => {
+    expect(
+      loadConfig({
+        ...base,
+        APP_HOST: "192.168.1.122",
+        APP_PORT: "3501",
+        APP_URL: "http://192.168.1.122:3501",
+      }),
+    ).toMatchObject({
+      host: "192.168.1.122",
+      port: 3501,
+      origin: "http://192.168.1.122:3501",
+    });
+    expect(loadConfig({ ...base, APP_HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
+    expect(loadConfig({ ...base, APP_HOST: "::1" }).host).toBe("::1");
+    expect(
+      loadConfig({ ...base, APP_URL: "http://192.168.1.122:3501" }).host,
+    ).toBe("127.0.0.1");
+    expect(
+      loadConfig(
+        { ...pg, APP_MODE: "docker", APP_HOST: "192.168.1.122" },
+        "docker",
+      ).host,
+    ).toBe("0.0.0.0");
   });
   it("uses separate PostgreSQL parameters without URL parsing or password mangling", () => {
     expect(
@@ -68,6 +94,11 @@ describe("deployment configuration", () => {
   });
   it.each([
     { APP_MODE: "demo" },
+    { DB_MIGRATION_MODE: "reset" },
+    { STARTUP_DASHBOARD: "invalid" },
+    { TRAFFIC_METER_ENABLED: "yes" },
+    { TRAFFIC_METER_INTERVAL_MS: "0" },
+    { TRAFFIC_METER_INTERVAL_MS: "60001" },
     { DB_PASSWRD: "typo" },
     { DB_FILE: "file://invalid" },
     { DB_TYPE: "sqlite" },
@@ -75,6 +106,9 @@ describe("deployment configuration", () => {
     { APP_PORT: "0" },
     { APP_PORT: "65536" },
     { APP_PORT: "1e3" },
+    { APP_HOST: "" },
+    { APP_HOST: "http://192.168.1.122" },
+    { APP_HOST: "192.168.1.122:3501" },
     { DB_PORT: "3.4" },
     { DB_HOST: "host/path" },
     { DB_HOST: "" },
@@ -115,6 +149,13 @@ describe("deployment configuration", () => {
     );
     expect(() =>
       loadConfig({ ...production, APP_URL: "http://hotel.example" }),
+    ).toThrow("HTTPS");
+    expect(() =>
+      loadConfig({
+        ...production,
+        APP_HOST: "192.168.1.122",
+        APP_URL: "http://192.168.1.122:3501",
+      }),
     ).toThrow("HTTPS");
     expect(
       loadConfig({
